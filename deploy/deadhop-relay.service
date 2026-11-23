@@ -1,0 +1,34 @@
+# systemd unit for a small VPS. Install the binary at /usr/local/bin/deadhop-relay,
+# put your settings in /etc/deadhop-relay.env (at least DEADHOP_RELAY_WHITELIST), then:
+#   systemctl enable --now deadhop-relay
+[Unit]
+Description=deadhop relay (Nostr relay for deadhop ContextVM traffic)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/deadhop-relay.env
+ExecStart=/usr/local/bin/deadhop-relay
+Restart=always
+RestartSec=2
+DynamicUser=yes
+# Every connection is a file descriptor.
+LimitNOFILE=65536
+MemoryMax=256M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

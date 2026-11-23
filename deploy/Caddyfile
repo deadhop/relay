@@ -1,0 +1,5 @@
+# TLS in front of deadhop-relay with Caddy (automatic certificates).
+# Set DEADHOP_RELAY_TRUSTED_PROXIES=127.0.0.1 so per-address limits see the real client.
+relay.example.com {
+	reverse_proxy 127.0.0.1:7447
+}

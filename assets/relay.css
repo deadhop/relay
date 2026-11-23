@@ -1,0 +1,77 @@
+/* deadhop relay status pages. Colours, type and shape from brand/tokens.css (developer face). */
+@font-face { font-family: 'Schibsted Grotesk'; src: url('/assets/schibsted-grotesk.woff2') format('woff2'); font-weight: 400 900; font-display: swap; }
+@font-face { font-family: 'Geist'; src: url('/assets/geist.woff2') format('woff2'); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: 'Martian Mono'; src: url('/assets/martian-mono.woff2') format('woff2'); font-weight: 400 700; font-display: swap; }
+
+:root {
+  --ground: #0e1214; --surface: #161b1d; --ink: #e6ebe9; --muted: #8e979b; --rule: #2a3236;
+  --accent: #5fc6b9; --tag: #e8c547; --ok: #5fcf94; --bad: #f2776d;
+  --display: 'Schibsted Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --body: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'Martian Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius: 4px; --outline: 1.5px;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root { --ground: #e9e8e3; --surface: #f5f4f0; --ink: #16191b; --muted: #5b636b; --rule: #cfcdc6;
+    --accent: #0b6e69; --ok: #1f7a4d; --bad: #b3261e; color-scheme: light; }
+}
+* { box-sizing: border-box; }
+html { background: var(--ground); color: var(--ink); font: 15px/1.5 var(--body); }
+body { margin: 0; min-height: 100vh; }
+a { color: var(--accent); }
+header.top { display: flex; align-items: center; gap: 14px; padding: 14px 28px; border-bottom: var(--outline) solid var(--rule); }
+header.top .mark { width: 26px; height: 26px; color: var(--accent); }
+header.top .word { font: 800 20px/1 var(--display); letter-spacing: -0.035em; }
+header.top .tag { font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ground); background: var(--tag); padding: 4px 6px; border-radius: 2px; }
+header.top nav { margin-left: auto; display: flex; gap: 18px; align-items: center; }
+header.top nav a { color: var(--muted); text-decoration: none; font: 500 12px/1 var(--mono); letter-spacing: .04em; }
+header.top nav a.on { color: var(--ink); border-bottom: 2px solid var(--accent); padding-bottom: 4px; }
+main { max-width: 1080px; margin: 0 auto; padding: 32px 28px 64px; }
+h1 { font: 800 34px/1.1 var(--display); letter-spacing: -0.03em; margin: 0 0 6px; }
+h2 { font: 700 18px/1.2 var(--display); margin: 34px 0 12px; }
+p.lead { color: var(--muted); margin: 0 0 24px; }
+.lbl { font: 500 11px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: var(--outline) solid var(--rule); border-radius: var(--radius); padding: 14px 16px; }
+.tile .v { font: 800 28px/1.1 var(--display); margin-top: 6px; }
+.card { background: var(--surface); border: var(--outline) solid var(--rule); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 12px; }
+.card.dashed { border-style: dashed; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font: 500 11px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 8px 10px; border-bottom: var(--outline) solid var(--rule); }
+td { padding: 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.wait { border: 1.5px dashed var(--muted); }
+.note { border-left: 3px solid var(--tag); padding: 10px 14px; background: var(--surface); margin: 16px 0; }
+.note.bad { border-color: var(--bad); } .note.ok { border-color: var(--ok); }
+form.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 16px; align-items: end; }
+label { display: block; }
+input { width: 100%; margin-top: 6px; padding: 9px 10px; font: 14px var(--body); color: var(--ink); background: var(--ground); border: var(--outline) solid var(--rule); border-radius: var(--radius); }
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { font: 600 13px/1 var(--mono); padding: 11px 16px; border-radius: var(--radius); border: var(--outline) solid var(--ink); background: var(--ink); color: var(--ground); cursor: pointer; }
+button.quiet { background: transparent; color: var(--ink); border-color: var(--rule); }
+button.danger { background: transparent; color: var(--bad); border-color: var(--bad); padding: 7px 10px; }
+form.inline { display: inline; }
+.login { max-width: 380px; margin: 12vh auto; }
+.login .card { padding: 26px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.muted { color: var(--muted); }
+code { font-family: var(--mono); font-size: 12.5px; background: var(--ground); padding: 2px 5px; border-radius: 3px; }
+
+/* Relay status: the last hour as bars, the whitelist, the limits. */
+.chart { width: 100%; height: 120px; display: block; }
+.chart .a { fill: var(--accent); }
+.chart .r { fill: var(--bad); }
+.chart .axis { stroke: var(--rule); stroke-width: 1; }
+.legend { display: flex; gap: 18px; margin-top: 8px; }
+.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend .sw.a { background: var(--accent); } .legend .sw.r { background: var(--bad); }
+.tile .v.ok { color: var(--ok); } .tile .v.bad { color: var(--bad); }
+.urls code { display: inline-block; margin: 0 8px 6px 0; font-size: 13px; padding: 5px 8px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0 24px; }
+td.n, th.n { text-align: right; font-family: var(--mono); font-size: 13px; }
+footer { color: var(--muted); font: 500 11px/1.6 var(--mono); margin-top: 40px; }
+@media (max-width: 640px) { header.top { padding: 12px 16px; } main { padding: 22px 16px 48px; } h1 { font-size: 28px; } }
+td.key { white-space: nowrap; }
+.tile .v { white-space: nowrap; }

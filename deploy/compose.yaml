@@ -1,0 +1,25 @@
+# deadhop relay with Docker Compose. Build from the repository root:
+#   docker compose -f relay/deploy/compose.yaml up -d --build
+# Set DEADHOP_RELAY_WHITELIST in a .env file next to this one, or in the shell.
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: relay/Dockerfile
+    image: deadhop-relay
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    environment:
+      DEADHOP_RELAY_WHITELIST: ${DEADHOP_RELAY_WHITELIST:?list your deadhop invoice and/or admin keys}
+      DEADHOP_RELAY_PUBLIC_URLS: ${DEADHOP_RELAY_PUBLIC_URLS:-}
+      # Behind the reverse proxy below, believe its X-Forwarded-For.
+      DEADHOP_RELAY_TRUSTED_PROXIES: ${DEADHOP_RELAY_TRUSTED_PROXIES:-}
+    ports:
+      - "7447:7447"
+      # The operator page has no sign-in: publish it to the host's loopback only.
+      - "127.0.0.1:7448:7448"

@@ -1,0 +1,108 @@
+{
+  "attack": {
+    "connections_closed": 0,
+    "events_accepted": 0,
+    "events_refused": 0,
+    "messages_sent": 0,
+    "spam_delivered_to_service": 0
+  },
+  "attackers": 0,
+  "clients": 400,
+  "dropped_replies": 0,
+  "dropped_requests": 0,
+  "elapsed_secs": 30.470073283,
+  "latency_ms": {
+    "max": 44.302,
+    "p50": 7.919,
+    "p90": 20.707,
+    "p99": 34.246
+  },
+  "rate_per_client": 5.0,
+  "refusals": {},
+  "relay": {
+    "rss_idle_kib": 2704,
+    "rss_peak_kib": 47624,
+    "stats": {
+      "addresses_tracked": 401,
+      "auth_failed": 0,
+      "auth_ok": 1,
+      "auth_other": 0,
+      "bytes_in": 57411752,
+      "bytes_out": 67778538,
+      "connections": 0,
+      "connections_refused": 0,
+      "connections_total": 401,
+      "deliveries": 120000,
+      "dropped": 0,
+      "events": 120000,
+      "events_by_writer": {
+        "health_checks": 0,
+        "public": 60000,
+        "whitelisted": 60000
+      },
+      "held": 0,
+      "keys": [
+        {
+          "inbound": 60000,
+          "label": "invoices",
+          "npub": "npub1aanfcdtxngyus4fv5cuszfwapasr3mrqadn2aa447vp9wyyucgcst05axw",
+          "outbound": 60000,
+          "sessions": 0
+        }
+      ],
+      "limits": {
+        "allow_health_check": true,
+        "auth_grace_secs": 5,
+        "connections_per_ip": 8,
+        "handshake_secs": 10,
+        "hold_secs": 30,
+        "idle_secs": 300,
+        "max_connections": 4096,
+        "max_event_age_secs": 600,
+        "max_filters": 4,
+        "max_limit": 500,
+        "max_message_bytes": 131072,
+        "max_subscriptions": 8,
+        "messages_per_sec": 50,
+        "min_pow": 0,
+        "probes_per_min": 30,
+        "public_events_per_min": 600,
+        "public_max_event_bytes": 32768,
+        "public_store_max_events": 1000,
+        "queue_bytes": 1048576,
+        "reserved_connections": 32,
+        "store_max_events": 20000,
+        "store_ttl_secs": 3600,
+        "trusted_proxies": 1,
+        "trusted_queue_bytes": 67108864
+      },
+      "name": "deadhop relay",
+      "probation": 0,
+      "probation_closed": 0,
+      "refusals": {
+        "auth-required": 0,
+        "blocked": 0,
+        "duplicate": 0,
+        "invalid": 0,
+        "pow": 0,
+        "rate-limited": 0,
+        "restricted": 0
+      },
+      "refused": 0,
+      "slow_closed": 0,
+      "stored": 21000,
+      "subscriptions": 0,
+      "uptime_secs": 36,
+      "version": "0.1.0",
+      "whitelisted_keys": 1
+    }
+  },
+  "replies_accepted": 60000,
+  "replies_at_client": 60000,
+  "requests_accepted": 60000,
+  "requests_at_service": 60000,
+  "requests_refused": 0,
+  "requests_sent": 60000,
+  "seconds": 30.0,
+  "throughput_round_trips_per_sec": 1969.145247624838
+}
