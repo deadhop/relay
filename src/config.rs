@@ -217,7 +217,10 @@ fn csv(get: Get, name: &str) -> Vec<String> {
 
 impl Config {
     /// Read the configuration. `read_file` loads the whitelist file.
-    pub fn from_env(get: Get, read_file: &dyn Fn(&str) -> std::io::Result<String>) -> Result<Config, String> {
+    /// An empty value counts as unset, so a compose file can pass every
+    /// variable through as `${NAME:-}`.
+    pub fn from_env(raw: Get, read_file: &dyn Fn(&str) -> std::io::Result<String>) -> Result<Config, String> {
+        let get: Get = &|k| raw(k).filter(|v| !v.trim().is_empty());
         let file = match get(ENV_WHITELIST_FILE) {
             Some(path) => Some(read_file(&path).map_err(|e| format!("{ENV_WHITELIST_FILE} {path}: {e}"))?),
             None => None,
@@ -377,6 +380,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn empty_values_are_unset() {
+        let c = config(&[
+            (ENV_WHITELIST, HEX),
+            ("DEADHOP_RELAY_MAX_CONNECTIONS", ""),
+            ("DEADHOP_RELAY_STATS_LISTEN", " "),
+        ])
+        .unwrap();
+        assert_eq!(c.limits.max_connections, Limits::default().max_connections);
+        assert_eq!(c.stats_listen, Some("127.0.0.1:7448".parse().unwrap()));
+        assert!(config(&[(ENV_WHITELIST, "")]).is_err());
+    }
+
+    #[test]
     fn defaults_and_overrides() {
         let c = config(&[(ENV_WHITELIST, HEX)]).unwrap();
         assert_eq!(c.listen, "0.0.0.0:7447".parse().unwrap());
@@ -406,7 +422,7 @@ pub(crate) mod tests {
         assert_eq!(c.public_urls, vec!["wss://relay.example", "ws://10.0.0.2:7447"]);
         assert_eq!((c.name.as_str(), c.description.as_str()), ("home", "mine"));
         assert_eq!(
-            config(&[(ENV_WHITELIST, HEX), ("DEADHOP_RELAY_STATS_LISTEN", " ")])
+            config(&[(ENV_WHITELIST, HEX), ("DEADHOP_RELAY_STATS_LISTEN", "off")])
                 .unwrap()
                 .stats_listen,
             None

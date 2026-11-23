@@ -700,7 +700,9 @@ async fn a_reconnecting_service_gets_what_arrived_while_it_was_away() {
     service.subscribe(filter, None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     service.disconnect().await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // nostr-sdk resubscribes only when the new connection is in a later
+    // second than the subscription (whole-second timestamps).
+    tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(
         r.shared
             .stats
