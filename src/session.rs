@@ -24,8 +24,12 @@ use crate::filter::Filter;
 use crate::http::Prefixed;
 use crate::hub::{Conn, Out, Sub};
 use crate::limits::{unix_now, Bucket, Origin};
+use crate::networks::{NetStats, Network};
 use crate::state::{lock, Shared};
 use crate::stats::Reason;
+
+/// Connections only arrive on networks the relay is served on, each counted.
+const COUNTED: &str = "every network a connection arrives on has counters";
 
 /// Rate-limited messages a connection may send before it is closed.
 pub const MAX_STRIKES: u32 = 50;
@@ -43,6 +47,9 @@ pub struct Admission {
 
 impl Admission {
     pub fn new(sh: Arc<Shared>, origin: Origin, probation: bool) -> Admission {
+        let n = sh.net(origin.network()).expect(COUNTED);
+        n.open.fetch_add(1, Relaxed);
+        n.total.fetch_add(1, Relaxed);
         sh.open.fetch_add(1, Relaxed);
         sh.stats.connections_open.fetch_add(1, Relaxed);
         sh.stats.connections_total.fetch_add(1, Relaxed);
@@ -64,6 +71,11 @@ impl Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         self.end_probation();
+        self.sh
+            .net(self.origin.network())
+            .expect(COUNTED)
+            .open
+            .fetch_sub(1, Relaxed);
         self.sh.open.fetch_sub(1, Relaxed);
         self.sh.stats.connections_open.fetch_sub(1, Relaxed);
         lock(&self.sh.origins).disconnect(self.origin);
@@ -152,6 +164,12 @@ impl Session {
 
     fn refuse(&self, r: Reason) {
         self.sh.stats.refuse(r, unix_now() / 60);
+        self.net().refuse(r, unix_now() / 60);
+    }
+
+    /// This connection's network's counters.
+    fn net(&self) -> &NetStats {
+        self.sh.net(self.adm.origin.network()).expect(COUNTED)
     }
 
     fn event(&mut self, raw: &RawValue, limited: bool) {
@@ -180,6 +198,12 @@ impl Session {
             );
         }
         let (accepted, m) = self.sh.publish(e, &self.conn, self.adm.origin);
+        // A duplicate is answered OK but counted as refused, as above.
+        if accepted && m.is_empty() {
+            self.net().accept(unix_now() / 60);
+        } else {
+            self.net().refuse(Reason::of(&m), unix_now() / 60);
+        }
         self.ok(&id, accepted, &m);
     }
 
@@ -290,6 +314,7 @@ impl Session {
                     self.sh.stats.auth_ok.fetch_add(1, Relaxed);
                     let counters = self.sh.stats.key(&k).expect("whitelisted keys have counters");
                     counters.sessions.fetch_add(1, Relaxed);
+                    self.net().session(&k, true);
                 }
                 self.adm.end_probation();
                 self.probation_until = None;
@@ -383,8 +408,14 @@ where
 /// Drain the queue. When the socket fails for good, the whole connection is
 /// closed, so the client reconnects (and finds what was held for it) instead
 /// of staying connected to a writer that is gone.
-async fn write_loop(sink: SplitSink<Ws, Message>, rx: mpsc::UnboundedReceiver<Out>, conn: Arc<Conn>, sh: Arc<Shared>) {
-    let _ = pump(sink, rx, conn.clone(), sh).await;
+async fn write_loop(
+    sink: SplitSink<Ws, Message>,
+    rx: mpsc::UnboundedReceiver<Out>,
+    conn: Arc<Conn>,
+    sh: Arc<Shared>,
+    net: Network,
+) {
+    let _ = pump(sink, rx, conn.clone(), sh, net).await;
     conn.end();
 }
 
@@ -394,6 +425,7 @@ async fn pump(
     mut rx: mpsc::UnboundedReceiver<Out>,
     conn: Arc<Conn>,
     sh: Arc<Shared>,
+    net: Network,
 ) -> Result<(), Box<WsError>> {
     loop {
         // The queue outlives this task, so it only ends with a Close.
@@ -403,6 +435,7 @@ async fn pump(
                 let r = sink.feed(Message::text(s)).await;
                 conn.sent(n);
                 sh.stats.bytes_out.fetch_add(n as u64, Relaxed);
+                sh.net(net).expect(COUNTED).bytes_out.fetch_add(n as u64, Relaxed);
                 settle(&mut sink, r).await?;
             }
             Out::Ping => {
@@ -447,10 +480,11 @@ pub async fn run(adm: Admission, ws: Ws, host: Option<&str>, mut shutdown: watch
     let lim = sh.cfg.limits.clone();
     let (conn, rx) = Conn::new(sh.next_id(), lim.queue_bytes, lim.trusted_queue_bytes);
     let (sink, mut stream) = ws.split();
-    let writer = tokio::spawn(write_loop(sink, rx, conn.clone(), sh.clone()));
+    let network = adm.origin.network();
+    let writer = tokio::spawn(write_loop(sink, rx, conn.clone(), sh.clone(), network));
     let rate = f64::from(lim.messages_per_sec);
     let mut s = Session {
-        hosts: sh.hosts(host),
+        hosts: sh.hosts_on(network, host),
         conn: conn.clone(),
         challenge: challenge(),
         subs: vec![],
@@ -475,6 +509,7 @@ pub async fn run(adm: Admission, ws: Ws, host: Option<&str>, mut shutdown: watch
                 Some(Ok(Message::Text(t))) => {
                     last_seen = Instant::now();
                     sh.stats.bytes_in.fetch_add(t.len() as u64, Relaxed);
+                    sh.net(network).expect(COUNTED).bytes_in.fetch_add(t.len() as u64, Relaxed);
                     if s.handle(t.as_str()).is_break() {
                         break "rate-limited";
                     }
@@ -506,6 +541,7 @@ pub async fn run(adm: Admission, ws: Ws, host: Option<&str>, mut shutdown: watch
             .expect("whitelisted keys have counters")
             .sessions
             .fetch_sub(1, Relaxed);
+        sh.net(network).expect(COUNTED).session(&k, false);
     }
     conn.control(Out::Close(reason.into()));
     // A peer that stops reading cannot hold the task open.

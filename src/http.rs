@@ -80,19 +80,24 @@ pub fn parse(buf: &[u8]) -> Result<Option<(Request, usize)>, httparse::Error> {
 
 /// Read one request head. Bytes after it are kept for the WebSocket.
 pub async fn read_head(stream: &mut TcpStream) -> io::Result<(Request, Vec<u8>)> {
-    let mut buf = Vec::with_capacity(1024);
+    read_head_after(stream, Vec::with_capacity(1024)).await
+}
+
+/// Read one request head whose first bytes, `buf`, were already read (after
+/// Tor's PROXY line, say).
+pub async fn read_head_after(stream: &mut TcpStream, mut buf: Vec<u8>) -> io::Result<(Request, Vec<u8>)> {
     let mut chunk = [0u8; 2048];
     loop {
-        let n = stream.read(&mut chunk).await?;
-        if n == 0 {
-            return Err(io::ErrorKind::UnexpectedEof.into());
-        }
-        buf.extend_from_slice(&chunk[..n]);
         match parse(&buf) {
             Ok(Some((req, used))) => return Ok((req, buf.split_off(used))),
             Ok(None) if buf.len() < MAX_HEAD => {}
             _ => return Err(io::ErrorKind::InvalidData.into()),
         }
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        buf.extend_from_slice(&chunk[..n]);
     }
 }
 

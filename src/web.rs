@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use crate::config::npub;
 use crate::http::{Request, Response};
 use crate::limits::unix_now;
+use crate::networks::{NetStats, Network};
 use crate::state::{lock, Shared};
 use crate::stats::{Minute, REASONS};
 
@@ -178,8 +179,55 @@ pub fn stats(sh: &Shared, operator: bool) -> Value {
         v.as_object_mut()
             .expect("an object")
             .extend(extra.as_object().expect("an object").clone());
+        if sh.has_overlays() {
+            let nets: Vec<Value> = sh.nets.iter().map(|n| network(sh, n, now)).collect();
+            v["networks"] = json!(nets);
+        }
     }
     v
+}
+
+/// One network's numbers, for the operator: the overview's card and the
+/// network's own page.
+pub fn network(sh: &Shared, n: &NetStats, now: u64) -> Value {
+    let net = n.network;
+    let (listen, urls, cap) = match sh.cfg.adapter(net) {
+        Some(a) => (Some(a.listen), a.urls.clone(), Some(a.max_connections)),
+        None => (sh.cfg.listen, sh.cfg.public_urls.clone(), None),
+    };
+    let history = n.history(now / 60);
+    let sessions: Vec<Value> = n
+        .sessions()
+        .into_iter()
+        .map(|(k, c)| json!({"label": sh.cfg.whitelist.label(&k), "npub": npub(&k), "sessions": c}))
+        .collect();
+    let refusals: serde_json::Map<String, Value> = REASONS
+        .iter()
+        .map(|r| (r.prefix().to_string(), json!(n.refused(*r))))
+        .collect();
+    json!({
+        "id": net.id(),
+        "label": net.label(),
+        "listen": listen.map(|a| a.to_string()),
+        "urls": urls,
+        "identity": net.identity(),
+        "daemons": sh.cfg.adapter(net).map(|a| a.daemons.iter().map(ToString::to_string).collect::<Vec<_>>()),
+        "connections": n.open.load(Relaxed),
+        "max_connections": cap,
+        "clients": lock(&sh.origins).connected(net),
+        "services": n.sessions().iter().filter(|(_, c)| *c > 0).count(),
+        "connections_total": n.total.load(Relaxed),
+        "turned_away": n.turned_away.load(Relaxed),
+        "events": n.accepted.load(Relaxed),
+        "refused": n.refused_total(),
+        "events_last_hour": history.iter().map(|m| m.accepted).sum::<u64>(),
+        "refused_last_hour": history.iter().map(|m| m.refused).sum::<u64>(),
+        "bytes_in": n.bytes_in.load(Relaxed),
+        "bytes_out": n.bytes_out.load(Relaxed),
+        "refusals": refusals,
+        "sessions": sessions,
+        "history": history,
+    })
 }
 
 fn limits(sh: &Shared) -> Value {
@@ -251,12 +299,76 @@ pub fn chart(history: &[Minute]) -> String {
     svg
 }
 
+/// The last hour's accepted events as a strip of bars, for a network's card.
+pub fn spark(history: &[Minute]) -> String {
+    let max = history.iter().map(|m| m.accepted).max().unwrap_or(0).max(1) as f64;
+    let mut svg = String::from(
+        "<svg class=\"spark\" viewBox=\"0 0 120 22\" preserveAspectRatio=\"none\" role=\"img\" \
+         aria-label=\"Events accepted per minute, last hour\">",
+    );
+    for (i, m) in history.iter().enumerate() {
+        let h = m.accepted as f64 / max * 20.0;
+        if m.accepted > 0 {
+            let _ = write!(
+                svg,
+                "<rect x=\"{}\" y=\"{:.1}\" width=\"1.4\" height=\"{h:.1}\"/>",
+                i * 2,
+                22.0 - h
+            );
+        }
+    }
+    svg.push_str("</svg>");
+    svg
+}
+
+/// Bytes as `812 B`, `4.2 KiB`, `38.1 MiB` or `2.0 GiB`.
+pub fn size(n: u64) -> String {
+    let units = ["KiB", "MiB", "GiB", "TiB"];
+    if n < 1024 {
+        return format!("{n} B");
+    }
+    let mut v = n as f64 / 1024.0;
+    let mut u = 0;
+    while v >= 1024.0 && u < units.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    format!("{v:.1} {}", units[u])
+}
+
 fn layout(sh: &Shared, title: &str, tag: &str, body: &str) -> String {
+    layout_nav(sh, title, tag, "", body)
+}
+
+/// The operator pages' links between networks, when there is more than one.
+fn nav(sh: &Shared, on: Option<Network>) -> String {
+    if !sh.has_overlays() {
+        return String::new();
+    }
+    let link = |href: String, label: &str, here: bool| {
+        format!(
+            "<a href=\"{href}\"{}>{label}</a>",
+            if here { " class=\"on\"" } else { "" }
+        )
+    };
+    let mut out = String::from("<nav>");
+    out += &link("/".into(), "Overview", on.is_none());
+    for n in &sh.nets {
+        out += &link(
+            format!("/networks/{}", n.network.id()),
+            n.network.label(),
+            on == Some(n.network),
+        );
+    }
+    out + "</nav>"
+}
+
+fn layout_nav(sh: &Shared, title: &str, tag: &str, nav: &str, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <meta http-equiv=\"refresh\" content=\"15\"><meta name=\"referrer\" content=\"no-referrer\"><title>{t} · deadhop relay</title>\
 <link rel=\"icon\" href=\"/assets/favicon.svg\" type=\"image/svg+xml\"><link rel=\"stylesheet\" href=\"/assets/relay.css\"></head>\
-<body><header class=\"top\"><span class=\"mark\">{MARK}</span><span class=\"word\">deadhop</span><span class=\"tag\">{tag}</span></header>\
+<body><header class=\"top\"><span class=\"mark\">{MARK}</span><span class=\"word\">deadhop</span><span class=\"tag\">{tag}</span>{nav}</header>\
 <main>{body}<footer>deadhop relay {VERSION} · {name} · this page refreshes every 15 seconds</footer></main></body></html>",
         t = esc(title),
         name = esc(&sh.cfg.name),
@@ -301,7 +413,9 @@ pub fn status_page(sh: &Shared) -> String {
         .iter()
         .map(|u| format!("<code>{}</code>", esc(u)))
         .collect();
-    let urls = if urls.is_empty() {
+    let urls = if sh.has_overlays() {
+        addresses(sh)
+    } else if urls.is_empty() {
         String::new()
     } else {
         format!("<div class=\"urls\">{urls}</div>")
@@ -321,6 +435,162 @@ listening for are held for {hold} seconds. Relay information (NIP-11): request t
         hold = sh.cfg.limits.hold_secs,
     );
     layout(sh, &sh.cfg.name, "relay", &body)
+}
+
+/// Every network's addresses, one row each, for a relay on more than clearnet.
+fn addresses(sh: &Shared) -> String {
+    let mut rows = String::new();
+    for n in sh.cfg.networks() {
+        let urls = match sh.cfg.adapter(n) {
+            Some(a) => &a.urls,
+            None => &sh.cfg.public_urls,
+        };
+        if urls.is_empty() {
+            continue;
+        }
+        let codes: String = urls.iter().map(|u| format!("<code>{}</code>", esc(u))).collect();
+        let _ = write!(
+            rows,
+            "<tr><td class=\"key lbl\">{}</td><td>{codes}</td></tr>",
+            n.label()
+        );
+    }
+    format!("<table class=\"addrs\"><tbody>{rows}</tbody></table>")
+}
+
+/// The overview's cards: one per network, each a link to the network's page.
+fn network_cards(v: &Value) -> String {
+    let Some(nets) = v["networks"].as_array() else {
+        return String::new();
+    };
+    let mut cards = String::new();
+    for n in nets {
+        let cap = n["max_connections"]
+            .as_u64()
+            .map_or(String::new(), |c| format!("<span class=\"of\"> / {}</span>", num(c)));
+        let history: Vec<Minute> = serde_json::from_value(n["history"].clone()).expect("minutes");
+        let _ = write!(
+            cards,
+            "<a class=\"netcard\" href=\"/networks/{id}\"><div class=\"lbl\"><span class=\"dot {dot}\"></span>{label}</div>\
+<div class=\"v\">{conns}{cap}</div>{spark}<div class=\"lbl\">{events} events · {refused} refused</div></a>",
+            id = n["id"].as_str().expect("an id"),
+            dot = if n["connections"].as_u64() > Some(0) { "ok" } else { "wait" },
+            label = esc(n["label"].as_str().expect("a label")),
+            conns = num(n["connections"].as_u64().expect("a counter")),
+            spark = spark(&history),
+            events = num(n["events_last_hour"].as_u64().expect("a counter")),
+            refused = num(n["refused_last_hour"].as_u64().expect("a counter")),
+        );
+    }
+    format!(
+        "<h2>Networks</h2><p class=\"muted sub\">Open connections, and events in the last hour. Open a network for its own numbers.</p>\
+<div class=\"netcards\">{cards}</div>"
+    )
+}
+
+/// A network's own page: only what arrived over it.
+pub fn network_page(sh: &Shared, net: Network) -> Option<String> {
+    let n = sh.net(net).filter(|_| sh.has_overlays())?;
+    let v = network(sh, n, unix_now());
+    let u = |k: &str| v[k].as_u64().expect("a counter");
+    let conns = match v["max_connections"].as_u64() {
+        Some(c) => format!("{}<span class=\"of\"> / {}</span>", num(u("connections")), num(c)),
+        None => num(u("connections")),
+    };
+    let tiles = format!(
+        "<div class=\"tiles\"><div class=\"tile\"><div class=\"lbl\">Connections</div><div class=\"v\">{conns}</div></div>{}{}{}{}{}</div>",
+        tile("Clients now", &num(u("clients")), ""),
+        tile("Services", &num(u("services")), ""),
+        tile("Events · hour", &short(u("events_last_hour")), ""),
+        tile("Refused · hour", &short(u("refused_last_hour")), ""),
+        tile("Turned away", &short(u("turned_away")), ""),
+    );
+    let urls: String = v["urls"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|x| format!("<code>{}</code>", esc(x.as_str().expect("a url"))))
+        .collect();
+    let row = |k: &str, val: String| format!("<tr><td>{k}</td><td>{val}</td></tr>");
+    let mono = |s: String| format!("<span class=\"mono\">{}</span>", esc(&s));
+    let mut how = row(
+        "Listening on",
+        mono(v["listen"].as_str().expect("an address").to_string()),
+    );
+    how += &row("Clients told apart", esc(net.identity()));
+    if let Some(d) = v["daemons"].as_array() {
+        let d: Vec<&str> = d.iter().map(|x| x.as_str().expect("an address")).collect();
+        how += &row("Accepted only from", mono(d.join(", ")));
+    }
+    how += &row(
+        "Connection cap",
+        mono(v["max_connections"].as_u64().map_or_else(
+            || format!("the relay's ({})", num(sh.cfg.limits.max_connections as u64)),
+            num,
+        )),
+    );
+    how += &row(
+        "Since start",
+        mono(format!(
+            "{} connections, {} events",
+            num(u("connections_total")),
+            num(u("events"))
+        )),
+    );
+    how += &row(
+        "Bytes in / out",
+        mono(format!("{} / {}", size(u("bytes_in")), size(u("bytes_out")))),
+    );
+    let refusals: String = v["refusals"]
+        .as_object()
+        .expect("an object")
+        .iter()
+        .map(|(k, c)| {
+            format!(
+                "<tr><td>{k}</td><td class=\"n\">{}</td></tr>",
+                num(c.as_u64().expect("a counter"))
+            )
+        })
+        .collect();
+    let mut keys = String::new();
+    for k in v["sessions"].as_array().expect("a list") {
+        let c = k["sessions"].as_u64().expect("a counter");
+        let _ = write!(
+            keys,
+            "<tr><td class=\"key\"><span class=\"dot {}\"></span>{}</td><td class=\"mono\">{}</td><td class=\"n\">{c}</td></tr>",
+            if c > 0 { "ok" } else { "wait" },
+            esc(k["label"].as_str().expect("a label")),
+            k["npub"].as_str().expect("an npub"),
+        );
+    }
+    let services = if keys.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<h2>Whitelisted keys over {label}</h2><div class=\"card\"><table><thead><tr><th>Key</th><th>npub</th>\
+<th class=\"n\">Sessions</th></tr></thead><tbody>{keys}</tbody></table></div>",
+            label = net.label()
+        )
+    };
+    let history: Vec<Minute> = serde_json::from_value(v["history"].clone()).expect("minutes");
+    let body = format!(
+        "<p class=\"crumb lbl\"><a href=\"/\">Overview</a> / {label}</p><h1>{label}</h1>\
+<p class=\"lead\">{service}. Numbers on this page count only what arrived over {label}.</p><div class=\"urls\">{urls}</div>{tiles}\
+<h2>Last hour</h2><div class=\"card\">{chart}<div class=\"legend lbl\"><span><span class=\"sw a\"></span>accepted per minute</span>\
+<span><span class=\"sw r\"></span>refused per minute</span></div></div>\
+<div class=\"cols\"><div><h2>How it is reached</h2><div class=\"card\"><table><tbody>{how}</tbody></table></div></div>\
+<div><h2>Refusals</h2><div class=\"card\"><table><tbody>{refusals}</tbody></table></div></div></div>{services}",
+        label = net.label(),
+        service = net.service(),
+        chart = chart(&history),
+    );
+    Some(layout_nav(
+        sh,
+        net.label(),
+        "relay · operator",
+        &nav(sh, Some(net)),
+        &body,
+    ))
 }
 
 /// What the status page says the relay carries, by mode.
@@ -408,16 +678,17 @@ pub fn operator_page(sh: &Shared) -> String {
         .collect();
     let body = format!(
         "<h1>{name}</h1><p class=\"lead\">Operator view. Served on its own listener without sign-in: keep it on loopback.</p>\
-{tiles}{history}<h2>Whitelist</h2><div class=\"card\"><table><thead><tr><th>Key</th><th>npub</th><th class=\"n\">Sessions</th>\
+{tiles}{networks}{history}<h2>Whitelist</h2><div class=\"card\"><table><thead><tr><th>Key</th><th>npub</th><th class=\"n\">Sessions</th>\
 <th class=\"n\">Requests in</th><th class=\"n\">Published</th></tr></thead><tbody>{keys}</tbody></table></div>\
 <div class=\"cols\"><div><h2>Traffic</h2><div class=\"card\"><table><tbody>{traffic}</tbody></table></div>\
 <h2>Refusals</h2><div class=\"card\"><table><tbody>{refusals}</tbody></table></div></div>\
 <div><h2>Limits</h2><div class=\"card\"><table><tbody>{limits}</tbody></table></div></div></div>",
         name = esc(&sh.cfg.name),
         tiles = tiles(&v),
+        networks = network_cards(&v),
         history = history(sh),
     );
-    layout(sh, "Operator", "relay · operator", &body)
+    layout_nav(sh, "Operator", "relay · operator", &nav(sh, None), &body)
 }
 
 fn asset(path: &str) -> Option<Response> {
@@ -464,6 +735,14 @@ pub fn route(sh: &Shared, req: &Request, operator: bool) -> Response {
         "/" => html(status_page(sh)),
         "/stats.json" => json_response(&stats(sh, operator)),
         "/health" => Response::text(200, "ok"),
+        p if operator && p.starts_with("/networks/") => {
+            let id = &p["/networks/".len()..];
+            let net = sh.nets.iter().map(|n| n.network).find(|n| n.id() == id);
+            match net.and_then(|n| network_page(sh, n)) {
+                Some(page) => html(page),
+                None => Response::text(404, "not found"),
+            }
+        }
         p => asset(p).unwrap_or_else(|| Response::text(404, "not found")),
     }
 }
@@ -585,6 +864,86 @@ mod tests {
         assert_eq!(route(&sh, &post, false).status, 405);
         let two = shared(&service, &[]);
         assert!(body(&route(&two, &get("/", None), false)).contains("1 key its"));
+    }
+
+    #[test]
+    fn clearnet_only_shows_nothing_about_networks() {
+        let sh = shared(
+            &Keys::generate(),
+            &[("DEADHOP_RELAY_PUBLIC_URLS", "wss://relay.example")],
+        );
+        assert!(!sh.has_overlays());
+        let status = body(&route(&sh, &get("/", None), false));
+        assert!(status.contains("<div class=\"urls\"><code>wss://relay.example</code></div>"));
+        assert!(!status.contains("addrs") && !status.contains("<nav>"));
+        let op = body(&route(&sh, &get("/", None), true));
+        assert!(!op.contains("<nav>") && !op.contains("Networks") && !op.contains("netcard"));
+        let v: Value = serde_json::from_str(&body(&route(&sh, &get("/stats.json", None), true))).unwrap();
+        assert!(v.get("networks").is_none());
+        assert_eq!(route(&sh, &get("/networks/clearnet", None), true).status, 404);
+        assert!(network_page(&sh, Network::Clearnet).is_none());
+    }
+
+    #[test]
+    fn networks_on_the_operator_pages() {
+        let sh = shared(
+            &Keys::generate(),
+            &[
+                ("DEADHOP_RELAY_TOR_LISTEN", "127.0.0.1:7451"),
+                ("DEADHOP_RELAY_TOR_URLS", "ws://abc.onion"),
+                ("DEADHOP_RELAY_FIPS_LISTEN", "[::]:7447"),
+                ("DEADHOP_RELAY_FIPS_URLS", "ws://npub1x.fips:7447"),
+            ],
+        );
+        sh.net(Network::Tor).unwrap().accept(unix_now() / 60);
+        let op = body(&route(&sh, &get("/", None), true));
+        assert!(op.contains("<a href=\"/\" class=\"on\">Overview</a>") && op.contains("href=\"/networks/fips\""));
+        assert!(op.contains("<span class=\"dot wait\"></span>Tor") && op.contains("1 events · 0 refused"));
+        // Clearnet has no cap of its own and no URLs here; the status page skips it.
+        let clear = body(&route(&sh, &get("/networks/clearnet", None), true));
+        assert!(clear.contains("the relay&#39;s (512)") && !clear.contains("Accepted only from"));
+        let fips = body(&route(&sh, &get("/networks/fips", None), true));
+        assert!(fips.contains("by node") && fips.contains("class=\"on\">FIPS"));
+        assert_eq!(
+            route(&sh, &get("/networks/i2p", None), true).status,
+            404,
+            "not served on I2P"
+        );
+        assert_eq!(
+            route(&sh, &get("/networks/tor", None), false).status,
+            404,
+            "operator only"
+        );
+        let status = body(&route(&sh, &get("/", None), false));
+        assert!(status.contains("<td class=\"key lbl\">Tor</td>") && !status.contains(">Clearnet<"));
+        assert!(!status.contains("netcard"), "no per-network numbers in public");
+    }
+
+    #[test]
+    fn a_network_page_without_a_whitelist() {
+        let cfg = crate::config::tests::config(&[
+            ("DEADHOP_RELAY_PUBLIC", "on"),
+            ("DEADHOP_RELAY_TOR_LISTEN", "127.0.0.1:7451"),
+            ("DEADHOP_RELAY_TOR_URLS", "ws://abc.onion"),
+        ])
+        .unwrap();
+        let sh = crate::state::Shared::new(cfg);
+        let page = body(&route(&sh, &get("/networks/tor", None), true));
+        assert!(page.contains("127.0.0.1, ::1") && !page.contains("Whitelisted keys over"));
+    }
+
+    #[test]
+    fn sizes_and_sparks() {
+        assert_eq!(size(812), "812 B");
+        assert_eq!(size(4300), "4.2 KiB");
+        assert_eq!(size(40_000_000), "38.1 MiB");
+        assert_eq!(size(u64::MAX), "16777216.0 TiB");
+        let mut h = vec![Minute::default(); 60];
+        h[59].accepted = 4;
+        h[58].accepted = 2;
+        let svg = spark(&h);
+        assert_eq!(svg.matches("<rect").count(), 2);
+        assert!(svg.contains("x=\"118\" y=\"2.0\""));
     }
 
     #[test]

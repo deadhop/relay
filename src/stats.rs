@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::Whitelist;
 use crate::event::Key;
@@ -62,7 +62,7 @@ pub struct KeyCounters {
 }
 
 /// One minute of history: events accepted, deliveries, refusals.
-#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Minute {
     pub minute: u64,
     pub accepted: u64,
@@ -71,6 +71,39 @@ pub struct Minute {
 }
 
 pub const HISTORY: usize = 60;
+
+/// The last hour, a [`Minute`] at a time.
+#[derive(Default)]
+pub struct History(Mutex<Vec<Minute>>);
+
+impl History {
+    pub fn record(&self, minute: u64, f: impl FnOnce(&mut Minute)) {
+        let mut h = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if h.last().is_none_or(|m| m.minute != minute) {
+            h.push(Minute {
+                minute,
+                ..Minute::default()
+            });
+            if h.len() > HISTORY {
+                h.remove(0);
+            }
+        }
+        f(h.last_mut().expect("just pushed"));
+    }
+
+    /// One entry per minute, oldest first, gaps filled with zeros.
+    pub fn last_hour(&self, now_minute: u64) -> Vec<Minute> {
+        let h = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (now_minute + 1 - HISTORY as u64..=now_minute)
+            .map(|m| {
+                h.iter().find(|x| x.minute == m).copied().unwrap_or(Minute {
+                    minute: m,
+                    ..Minute::default()
+                })
+            })
+            .collect()
+    }
+}
 
 #[derive(Default)]
 pub struct Stats {
@@ -101,7 +134,7 @@ pub struct Stats {
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
     keys: Vec<(Key, KeyCounters)>,
-    history: Mutex<Vec<Minute>>,
+    history: History,
 }
 
 impl Stats {
@@ -134,30 +167,12 @@ impl Stats {
     }
 
     fn record(&self, minute: u64, f: impl FnOnce(&mut Minute)) {
-        let mut h = self.history.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if h.last().is_none_or(|m| m.minute != minute) {
-            h.push(Minute {
-                minute,
-                ..Minute::default()
-            });
-            if h.len() > HISTORY {
-                h.remove(0);
-            }
-        }
-        f(h.last_mut().expect("just pushed"));
+        self.history.record(minute, f);
     }
 
     /// The last hour, one entry per minute, oldest first, gaps filled with zeros.
     pub fn history(&self, now_minute: u64) -> Vec<Minute> {
-        let h = self.history.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        (now_minute + 1 - HISTORY as u64..=now_minute)
-            .map(|m| {
-                h.iter().find(|x| x.minute == m).copied().unwrap_or(Minute {
-                    minute: m,
-                    ..Minute::default()
-                })
-            })
-            .collect()
+        self.history.last_hour(now_minute)
     }
 
     pub fn refused_total(&self) -> u64 {
