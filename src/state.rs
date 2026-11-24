@@ -18,6 +18,7 @@ use crate::event::{leading_zero_bits, Event, Key, ANNOUNCE_KINDS, AUTH, CTXVM, M
 use crate::filter::Filter;
 use crate::hub::{Conn, Hub};
 use crate::limits::{unix_now, Bucket, Origin, Origins};
+use crate::networks::{NetStats, Network};
 use crate::stats::{Reason, Stats};
 use crate::store::{Seen, Store, Writer};
 
@@ -60,6 +61,8 @@ pub enum Verdict {
 pub struct Shared {
     pub cfg: Config,
     pub stats: Stats,
+    /// One per network the relay is served on, clearnet first.
+    pub nets: Vec<NetStats>,
     pub hub: Hub,
     pub store: Mutex<Store>,
     seen: Mutex<Seen>,
@@ -81,6 +84,11 @@ impl Shared {
         let now = Instant::now();
         Arc::new(Shared {
             stats: Stats::new(&cfg.whitelist),
+            nets: cfg
+                .networks()
+                .into_iter()
+                .map(|n| NetStats::new(n, &cfg.whitelist))
+                .collect(),
             hub: Hub::default(),
             store: Mutex::new(Store::new(
                 cfg.limits.store_max_events,
@@ -98,6 +106,17 @@ impl Shared {
             started_unix: unix_now(),
             cfg,
         })
+    }
+
+    /// The counters of network `n`, if the relay is served on it.
+    pub fn net(&self, n: Network) -> Option<&NetStats> {
+        self.nets.iter().find(|s| s.network == n)
+    }
+
+    /// Whether the relay is served on anything but clearnet. Without that,
+    /// nothing about networks is shown anywhere.
+    pub fn has_overlays(&self) -> bool {
+        !self.cfg.adapters.is_empty()
     }
 
     pub fn next_id(&self) -> u64 {
@@ -341,6 +360,15 @@ impl Shared {
             host_header.map(host_of).into_iter().collect()
         } else {
             self.cfg.public_urls.iter().map(|u| host_of(u)).collect()
+        }
+    }
+
+    /// The names a client on network `n` may use in AUTH: an overlay's own
+    /// addresses (its daemon may rewrite the Host header), clearnet's as above.
+    pub fn hosts_on(&self, n: Network, host_header: Option<&str>) -> Vec<String> {
+        match self.cfg.adapter(n) {
+            Some(a) => a.urls.iter().map(|u| host_of(u)).collect(),
+            None => self.hosts(host_header),
         }
     }
 

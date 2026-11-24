@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::event::{hex_bytes, Key};
+use crate::networks::{Adapter, Network, OVERLAYS};
 
 /// The keys this relay carries traffic for, with the operator's label for each.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -109,7 +110,8 @@ impl Default for Limits {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    pub listen: SocketAddr,
+    /// Clearnet. `None` (`off`) only when an adapter serves the relay instead.
+    pub listen: Option<SocketAddr>,
     /// The operator page, served without sign-in: keep it on loopback.
     pub stats_listen: Option<SocketAddr>,
     pub whitelist: Whitelist,
@@ -124,6 +126,23 @@ pub struct Config {
     /// Accept deadhop's relay health check (see the docs).
     pub allow_probe: bool,
     pub limits: Limits,
+    /// The overlay networks the relay is also served on (Tor, I2P, FIPS).
+    pub adapters: Vec<Adapter>,
+}
+
+impl Config {
+    pub fn adapter(&self, n: Network) -> Option<&Adapter> {
+        self.adapters.iter().find(|a| a.network == n)
+    }
+
+    /// The networks the relay is served on, clearnet first.
+    pub fn networks(&self) -> Vec<Network> {
+        let clearnet = self.listen.map(|_| Network::Clearnet);
+        clearnet
+            .into_iter()
+            .chain(self.adapters.iter().map(|a| a.network))
+            .collect()
+    }
 }
 
 pub const ENV_WHITELIST: &str = "DEADHOP_RELAY_WHITELIST";
@@ -222,6 +241,65 @@ fn csv(get: Get, name: &str) -> Vec<String> {
         .collect()
 }
 
+/// The IP addresses in `DEADHOP_RELAY_<suffix>`, comma-separated.
+fn ips(get: Get, name: &str) -> Result<Vec<IpAddr>, String> {
+    csv(get, name)
+        .iter()
+        .map(|p| p.parse().map_err(|_| format!("{name}: '{p}' is not an IP address")))
+        .collect()
+}
+
+/// The `ws://` or `wss://` addresses in `name`, each on network `n` when it
+/// is an overlay (`.onion`, `.i2p`, `.fips`).
+fn urls(get: Get, name: &str, n: Network) -> Result<Vec<String>, String> {
+    let urls = csv(get, name);
+    for u in &urls {
+        if !(u.starts_with("ws://") || u.starts_with("wss://")) {
+            return Err(format!("{name}: '{u}' must start with ws:// or wss://"));
+        }
+        if n != Network::Clearnet && !crate::state::host_of(u).ends_with(n.suffix()) {
+            return Err(format!(
+                "{name}: '{u}' is not a {} address (…{})",
+                n.label(),
+                n.suffix()
+            ));
+        }
+    }
+    Ok(urls)
+}
+
+/// The adapter for overlay `n`, if `DEADHOP_RELAY_<N>_LISTEN` is set.
+fn adapter(get: Get, n: Network) -> Result<Option<Adapter>, String> {
+    let var = |s: &str| format!("DEADHOP_RELAY_{}_{s}", n.env());
+    let Some(listen) = addr(get, &var("LISTEN"), "off")? else {
+        return Ok(None);
+    };
+    let urls = urls(get, &var("URLS"), n)?;
+    if urls.is_empty() {
+        return Err(format!(
+            "{} is required with {}: the {} address clients use, for example ws://….{}",
+            var("URLS"),
+            var("LISTEN"),
+            n.label(),
+            n.suffix().trim_start_matches('.')
+        ));
+    }
+    let daemons = match n {
+        Network::Fips => vec![],
+        _ if get(&var("DAEMONS")).is_none() => {
+            vec![IpAddr::from([127, 0, 0, 1]), IpAddr::from([0u16, 0, 0, 0, 0, 0, 0, 1])]
+        }
+        _ => ips(get, &var("DAEMONS"))?,
+    };
+    Ok(Some(Adapter {
+        network: n,
+        listen,
+        urls,
+        daemons,
+        max_connections: num(get, &format!("{}_MAX_CONNECTIONS", n.env()), 128, 1, 1_000_000)?,
+    }))
+}
+
 impl Config {
     /// Read the configuration. `read_file` loads the whitelist file.
     /// An empty value counts as unset, so a compose file can pass every
@@ -269,28 +347,25 @@ impl Config {
             queue_bytes: num(get, "QUEUE_BYTES", d.queue_bytes, 64 * 1024, 1024 * mb)?,
             trusted_queue_bytes: num(get, "TRUSTED_QUEUE_BYTES", d.trusted_queue_bytes, mb, 16 * 1024 * mb)?,
         };
-        let mut trusted_proxies = vec![];
-        for p in csv(get, "DEADHOP_RELAY_TRUSTED_PROXIES") {
-            let ip = p
-                .parse()
-                .map_err(|_| format!("DEADHOP_RELAY_TRUSTED_PROXIES: '{p}' is not an IP address"))?;
-            trusted_proxies.push(ip);
+        let trusted_proxies = ips(get, "DEADHOP_RELAY_TRUSTED_PROXIES")?;
+        let public_urls = urls(get, "DEADHOP_RELAY_PUBLIC_URLS", Network::Clearnet)?;
+        let mut adapters = vec![];
+        for n in OVERLAYS {
+            adapters.extend(adapter(get, n)?);
         }
-        let public_urls = csv(get, "DEADHOP_RELAY_PUBLIC_URLS");
-        if let Some(bad) = public_urls
-            .iter()
-            .find(|u| !(u.starts_with("ws://") || u.starts_with("wss://")))
-        {
-            return Err(format!(
-                "DEADHOP_RELAY_PUBLIC_URLS: '{bad}' must start with ws:// or wss://"
-            ));
+        let listen = addr(get, "DEADHOP_RELAY_LISTEN", "0.0.0.0:7447")?;
+        if listen.is_none() && adapters.is_empty() {
+            return Err(
+                "DEADHOP_RELAY_LISTEN cannot be off unless the relay is served on Tor, I2P or FIPS (DEADHOP_RELAY_TOR_LISTEN, …)"
+                    .into(),
+            );
         }
         let name = get("DEADHOP_RELAY_NAME").unwrap_or_else(|| "deadhop relay".into());
         if name.chars().count() > 64 {
             return Err("DEADHOP_RELAY_NAME must be at most 64 characters".into());
         }
         Ok(Config {
-            listen: addr(get, "DEADHOP_RELAY_LISTEN", "0.0.0.0:7447")?.ok_or("DEADHOP_RELAY_LISTEN cannot be off")?,
+            listen,
             stats_listen: addr(get, "DEADHOP_RELAY_STATS_LISTEN", "127.0.0.1:7448")?,
             whitelist,
             public,
@@ -306,6 +381,7 @@ impl Config {
             trusted_proxies,
             allow_probe: flag(get, "DEADHOP_RELAY_ALLOW_PROBE", true)?,
             limits,
+            adapters,
         })
     }
 }
@@ -359,6 +435,81 @@ pub(crate) mod tests {
         assert!(config(&[(ENV_PUBLIC, "maybe")])
             .unwrap_err()
             .contains("DEADHOP_RELAY_PUBLIC"));
+    }
+
+    #[test]
+    fn overlay_adapters() {
+        let onion = "ws://k7m3x2p4vq5zl6n8a7rjw3e9tthd4ysq2bgm5c6uv7xn2pqe5ar4lyid.onion";
+        let c = config(&[
+            (ENV_WHITELIST, HEX),
+            ("DEADHOP_RELAY_TOR_LISTEN", "127.0.0.1:7451"),
+            ("DEADHOP_RELAY_TOR_URLS", onion),
+            ("DEADHOP_RELAY_I2P_LISTEN", "127.0.0.1:7452"),
+            ("DEADHOP_RELAY_I2P_URLS", "ws://abc.b32.i2p"),
+            ("DEADHOP_RELAY_I2P_DAEMONS", "10.0.0.2"),
+            ("DEADHOP_RELAY_I2P_MAX_CONNECTIONS", "9"),
+            ("DEADHOP_RELAY_FIPS_LISTEN", "[::]:7447"),
+            ("DEADHOP_RELAY_FIPS_URLS", "wss://npub1x.fips:7447/"),
+        ])
+        .unwrap();
+        assert_eq!(
+            c.networks(),
+            [Network::Clearnet, Network::Tor, Network::I2p, Network::Fips]
+        );
+        let tor = c.adapter(Network::Tor).unwrap();
+        assert_eq!(
+            (tor.listen.port(), tor.urls[0].as_str(), tor.max_connections),
+            (7451, onion, 128)
+        );
+        assert_eq!(
+            tor.daemons,
+            ["127.0.0.1".parse::<IpAddr>().unwrap(), "::1".parse().unwrap()]
+        );
+        let i2p = c.adapter(Network::I2p).unwrap();
+        assert_eq!(
+            (i2p.daemons.clone(), i2p.max_connections),
+            (vec!["10.0.0.2".parse::<IpAddr>().unwrap()], 9)
+        );
+        assert!(c.adapter(Network::Fips).unwrap().daemons.is_empty());
+        assert!(c.adapter(Network::Clearnet).is_none());
+        // None configured: nothing changes.
+        let plain = config(&[(ENV_WHITELIST, HEX)]).unwrap();
+        assert!(plain.adapters.is_empty() && plain.networks() == [Network::Clearnet]);
+
+        let tor = |extra: &[(&'static str, &'static str)]| {
+            let mut p = vec![(ENV_WHITELIST, HEX), ("DEADHOP_RELAY_TOR_LISTEN", "127.0.0.1:7451")];
+            p.extend_from_slice(extra);
+            config(&p)
+        };
+        assert!(tor(&[]).unwrap_err().contains("DEADHOP_RELAY_TOR_URLS is required"));
+        assert!(tor(&[("DEADHOP_RELAY_TOR_URLS", "ws://example.com")])
+            .unwrap_err()
+            .contains("not a Tor address"));
+        assert!(tor(&[("DEADHOP_RELAY_TOR_URLS", "http://x.onion")])
+            .unwrap_err()
+            .contains("ws://"));
+        assert!(
+            tor(&[("DEADHOP_RELAY_TOR_URLS", onion), ("DEADHOP_RELAY_TOR_DAEMONS", "tor")])
+                .unwrap_err()
+                .contains("not an IP address")
+        );
+        assert!(tor(&[
+            ("DEADHOP_RELAY_TOR_URLS", onion),
+            ("DEADHOP_RELAY_TOR_MAX_CONNECTIONS", "0")
+        ])
+        .is_err());
+        assert!(config(&[(ENV_WHITELIST, HEX), ("DEADHOP_RELAY_TOR_LISTEN", "tor")]).is_err());
+        assert!(config(&[(ENV_WHITELIST, HEX), ("DEADHOP_RELAY_TOR_LISTEN", "off")])
+            .unwrap()
+            .adapters
+            .is_empty());
+
+        // Clearnet off: only with an overlay.
+        let off = tor(&[("DEADHOP_RELAY_TOR_URLS", onion), ("DEADHOP_RELAY_LISTEN", "off")]).unwrap();
+        assert_eq!((off.listen, off.networks()), (None, vec![Network::Tor]));
+        assert!(config(&[(ENV_WHITELIST, HEX), ("DEADHOP_RELAY_LISTEN", "off")])
+            .unwrap_err()
+            .contains("unless the relay is served on Tor, I2P or FIPS"));
     }
 
     #[test]
@@ -444,7 +595,7 @@ pub(crate) mod tests {
     #[test]
     fn defaults_and_overrides() {
         let c = config(&[(ENV_WHITELIST, HEX)]).unwrap();
-        assert_eq!(c.listen, "0.0.0.0:7447".parse().unwrap());
+        assert_eq!(c.listen, Some("0.0.0.0:7447".parse().unwrap()));
         assert_eq!(c.stats_listen, Some("127.0.0.1:7448".parse().unwrap()));
         assert_eq!(c.limits, Limits::default());
         assert!(c.allow_probe);
@@ -462,7 +613,7 @@ pub(crate) mod tests {
             ("DEADHOP_RELAY_DESCRIPTION", "mine"),
         ])
         .unwrap();
-        assert_eq!(c.listen, "127.0.0.1:9000".parse().unwrap());
+        assert_eq!(c.listen, Some("127.0.0.1:9000".parse().unwrap()));
         assert_eq!(c.stats_listen, None);
         assert_eq!(c.limits.max_connections, 64);
         assert_eq!(c.limits.min_pow, 8);

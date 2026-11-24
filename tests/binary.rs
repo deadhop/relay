@@ -58,6 +58,49 @@ fn check_prints_the_configuration() {
 }
 
 #[test]
+fn check_prints_each_network() {
+    let out = relay()
+        .arg("check")
+        .env("DEADHOP_RELAY_PUBLIC", "on")
+        .env("DEADHOP_RELAY_LISTEN", "off")
+        .env("DEADHOP_RELAY_TOR_LISTEN", "127.0.0.1:7451")
+        .env("DEADHOP_RELAY_TOR_URLS", "ws://abc.onion")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("listen        off\n"), "{stdout}");
+    assert!(
+        stdout.contains("tor           127.0.0.1:7451 for ws://abc.onion (at most 128 connections)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn starts_on_an_overlay_alone() {
+    let mut child = relay()
+        .env("DEADHOP_RELAY_PUBLIC", "on")
+        .env("DEADHOP_RELAY_LISTEN", "off")
+        .env("DEADHOP_RELAY_TOR_LISTEN", "127.0.0.1:0")
+        .env("DEADHOP_RELAY_TOR_URLS", "ws://abc.onion")
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+    assert!(lines.next().unwrap().unwrap().contains("listening on 127.0.0.1:"));
+    let tor = lines.next().unwrap().unwrap();
+    assert!(
+        tor.starts_with("deadhop-relay: Tor on 127.0.0.1:") && tor.ends_with("for ws://abc.onion"),
+        "{tor}"
+    );
+    assert!(Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}
+
+#[test]
 fn check_prints_public_mode() {
     let out = relay().arg("check").env("DEADHOP_RELAY_PUBLIC", "on").output().unwrap();
     assert_eq!(out.status.code(), Some(0));

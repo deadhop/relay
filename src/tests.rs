@@ -649,7 +649,13 @@ async fn pages_on_both_listeners() {
     let _ws = raw_with(&r, &[("X-Forwarded-For", "203.0.113.9")]).await;
     assert_eq!(r.shared.origins.lock().unwrap().len(), 1);
     let stop = tokio::sync::watch::channel(false).1;
-    server::accepted(&r.shared, Err(std::io::Error::other("test")), false, &stop).await;
+    server::accepted(
+        &r.shared,
+        Err(std::io::Error::other("test")),
+        server::Door::Operator,
+        &stop,
+    )
+    .await;
     r.stop().await;
 }
 

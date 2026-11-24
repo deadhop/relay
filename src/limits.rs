@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
+use crate::networks::Network;
+
 /// A token bucket: `rate` tokens a second, holding at most `burst`.
 #[derive(Debug, Clone)]
 pub struct Bucket {
@@ -52,12 +54,20 @@ impl Bucket {
     }
 }
 
-/// Where connections come from, for limits: an IPv4 address, or the /64 an
-/// IPv6 address sits in (one host usually holds a whole /64).
+/// Where connections come from, for limits: on clearnet an IPv4 address, or
+/// the /64 an IPv6 address sits in (one host usually holds a whole /64); on
+/// an overlay network, what its adapter tells clients apart by. Each is its
+/// own kind, so clients of different networks never share a budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Origin {
     V4(u32),
     V6(u64),
+    /// A Tor circuit.
+    Tor(u32),
+    /// An I2P destination (hashed).
+    I2p(u128),
+    /// A FIPS node's address.
+    Fips(u128),
 }
 
 impl Origin {
@@ -68,6 +78,15 @@ impl Origin {
                 Some(v4) => Origin::V4(u32::from(v4)),
                 None => Origin::V6((u128::from(v6) >> 64) as u64),
             },
+        }
+    }
+
+    pub fn network(self) -> Network {
+        match self {
+            Origin::V4(_) | Origin::V6(_) => Network::Clearnet,
+            Origin::Tor(_) => Network::Tor,
+            Origin::I2p(_) => Network::I2p,
+            Origin::Fips(_) => Network::Fips,
         }
     }
 }
@@ -167,6 +186,11 @@ impl Origins {
         self.map.len()
     }
 
+    /// Clients on `n` with a connection open now.
+    pub fn connected(&self, n: Network) -> usize {
+        self.map.iter().filter(|(o, e)| o.network() == n && e.conns > 0).count()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -210,6 +234,30 @@ mod tests {
         assert_eq!(
             Origin::of("::ffff:10.0.0.1".parse().unwrap()),
             Origin::of("10.0.0.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn origins_by_network() {
+        let t = Instant::now();
+        let mut o = Origins::new(2);
+        let clear = Origin::of("10.0.0.1".parse().unwrap());
+        assert_eq!(clear.network(), Network::Clearnet);
+        assert_eq!(Origin::of("2001:db8::1".parse().unwrap()).network(), Network::Clearnet);
+        assert_eq!(Origin::Tor(1).network(), Network::Tor);
+        assert_eq!(Origin::I2p(1).network(), Network::I2p);
+        assert_eq!(Origin::Fips(1).network(), Network::Fips);
+        o.connect(clear, 8, t);
+        o.connect(Origin::Tor(1), 8, t);
+        o.connect(Origin::Tor(2), 8, t);
+        o.take_event(Origin::Tor(3), t);
+        assert_eq!(
+            (
+                o.connected(Network::Tor),
+                o.connected(Network::Clearnet),
+                o.connected(Network::Fips)
+            ),
+            (2, 1, 0)
         );
     }
 

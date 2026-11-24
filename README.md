@@ -18,7 +18,7 @@ deadhop talks only over [ContextVM](https://contextvm.org) (MCP over Nostr), so 
 - **answers** from those keys only, either signed by them or sent on a connection that proved the key with NIP-42 AUTH;
 - those keys' **announcements**.
 
-It refuses everything else, before checking any signature. Without a whitelist it does not start, unless you set `DEADHOP_RELAY_PUBLIC=on`: it then carries ContextVM traffic for any key, under public limits, and whitelisted keys keep their privileges ([public mode](https://deadhop.run/relay/docs/security.html#public-mode)).
+It can also be served on Tor, I2P and FIPS, alone or all at once, each through an adapter your daemon forwards to ([networks](https://deadhop.run/relay/docs/networks.html)). It refuses everything else, before checking any signature. Without a whitelist it does not start, unless you set `DEADHOP_RELAY_PUBLIC=on`: it then carries ContextVM traffic for any key, under public limits, and whitelisted keys keep their privileges ([public mode](https://deadhop.run/relay/docs/security.html#public-mode)).
 
 ```text
 customer / dashboard ──wss──▶ deadhop-relay ◀──wss── deadhop service (AUTH as a whitelisted key)
@@ -76,6 +76,7 @@ The docs are in `site/relay-docs/` and are published at `/relay/docs/`.
 | [Security](../site/relay-docs/security.md) | what the relay sees and trusts; the health-check exception |
 | [Configuration](../site/relay-docs/configuration.md) | every `DEADHOP_RELAY_*` variable, default and range |
 | [Deployment](../site/relay-docs/deployment.md) | systemd, Docker, Caddy, nginx, Traefik, the home network |
+| [Tor, I2P and FIPS](../site/relay-docs/networks.md) | serving the relay on overlay networks, at once, with each network's numbers |
 | [Status pages](../site/relay-docs/status-pages.md) | the public page, the operator page, NIP-11, `/stats.json` |
 | [Testing](../site/relay-docs/testing.md) | what the tests cover, and the deadhop e2e runs |
 
@@ -95,6 +96,7 @@ relay/
 │   ├── hub.rs                subscriptions, fan-out, per-connection queues
 │   ├── lib.rs                command line and serve loop
 │   ├── limits.rs             token buckets, per-address accounting
+│   ├── networks/             Tor, I2P and FIPS adapters, per-network counters
 │   ├── server.rs             listeners and admission
 │   ├── session.rs            one connection: EVENT, REQ, CLOSE, AUTH
 │   ├── state.rs              the write policy and shared state
