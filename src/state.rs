@@ -3,6 +3,11 @@
 //! An event is judged in order of cost: kind, timestamps and the whitelist
 //! first, then the per-address budget and proof of work, and only then the
 //! signature. Junk is refused before it costs a Schnorr verification.
+//!
+//! In public mode, keys that are not whitelisted may also talk to each other
+//! and announce themselves, under the same per-address limits as requests.
+//! Whitelisted keys keep everything they had: their own store budget, their
+//! large queue, and requests to them readable only by them.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -80,6 +85,7 @@ impl Shared {
             store: Mutex::new(Store::new(
                 cfg.limits.store_max_events,
                 cfg.limits.public_store_max_events,
+                cfg.limits.open_store_max_events,
             )),
             seen: Mutex::new(Seen::new(SEEN_IDS)),
             origins: Mutex::new(Origins::new(cfg.limits.public_events_per_min)),
@@ -120,6 +126,8 @@ impl Shared {
         if ANNOUNCE_KINDS.contains(&e.kind) {
             return if by_whitelisted {
                 Verdict::Accept(Writer::Trusted)
+            } else if self.cfg.public {
+                self.open(e, origin, now)
             } else {
                 refuse(
                     Reason::Restricted,
@@ -154,19 +162,7 @@ impl Shared {
                     "rate-limited: the service is busy; try again shortly",
                 );
             }
-            if !lock(&self.origins).take_event(origin, now) {
-                return refuse(
-                    Reason::RateLimited,
-                    "rate-limited: too many events from your address; slow down",
-                );
-            }
-            if leading_zero_bits(&e.id) < u32::from(lim.min_pow) {
-                return Verdict::Refuse(
-                    Reason::Pow,
-                    format!("pow: this relay needs {} bits of work", lim.min_pow),
-                );
-            }
-            return Verdict::Accept(Writer::Public);
+            return self.budget(e, origin, now, Writer::Public);
         }
         if self.cfg.allow_probe && is_probe(e) {
             // The sender's own budget first, so one address cannot spend
@@ -186,6 +182,9 @@ impl Shared {
                 )
             };
         }
+        if self.cfg.public {
+            return self.open(e, origin, now);
+        }
         if other {
             return refuse(
                 Reason::Restricted,
@@ -196,6 +195,32 @@ impl Shared {
             Reason::AuthRequired,
             "auth-required: only a whitelisted key may write to keys that are not whitelisted; authenticate first",
         )
+    }
+
+    /// Public mode: an event by a key that is not whitelisted, to keys that
+    /// are not whitelisted either (or its own announcement).
+    fn open(&self, e: &Event, origin: Origin, now: Instant) -> Verdict {
+        let max = self.cfg.limits.open_max_event_bytes;
+        if e.raw.len() > max {
+            let m = format!("invalid: events between keys that are not whitelisted are limited to {max} bytes");
+            return Verdict::Refuse(Reason::Invalid, m);
+        }
+        self.budget(e, origin, now, Writer::Open)
+    }
+
+    /// The sender address's event budget, then proof of work.
+    fn budget(&self, e: &Event, origin: Origin, now: Instant, writer: Writer) -> Verdict {
+        if !lock(&self.origins).take_event(origin, now) {
+            return Verdict::Refuse(
+                Reason::RateLimited,
+                "rate-limited: too many events from your address; slow down".into(),
+            );
+        }
+        let pow = self.cfg.limits.min_pow;
+        if leading_zero_bits(&e.id) < u32::from(pow) {
+            return Verdict::Refuse(Reason::Pow, format!("pow: this relay needs {pow} bits of work"));
+        }
+        Verdict::Accept(writer)
     }
 
     fn refuse(&self, r: Reason, m: String) -> (bool, String) {
@@ -231,14 +256,22 @@ impl Shared {
         } else {
             lim.store_ttl_secs
         };
-        if writer != Writer::Probe && (ttl > 0 || e.is_replaceable()) {
+        let kept = writer != Writer::Probe && (ttl > 0 || e.is_replaceable());
+        if kept {
             lock(&self.store).insert(e.clone(), writer, now_unix + ttl);
         }
         let f = self.hub.fanout(&e, writer);
+        // Ephemeral messages are held only for a subscriber that was not
+        // there yet: once delivered, a later subscription (a client that
+        // reconnected, say) must not get them again as if they were new.
+        if kept && e.is_ephemeral() && f.delivered > 0 {
+            lock(&self.store).remove(&e.id, writer);
+        }
         let counter = match writer {
             Writer::Trusted => &self.stats.events_trusted,
             Writer::Public => &self.stats.events_public,
             Writer::Probe => &self.stats.events_probe,
+            Writer::Open => &self.stats.events_open,
         };
         counter.fetch_add(1, Relaxed);
         self.stats.dropped.fetch_add(f.failed, Relaxed);
@@ -431,6 +464,75 @@ pub(crate) mod tests {
         let one = shared(&service, &[("DEADHOP_RELAY_PROBES_PER_MIN", "1")]);
         assert_eq!(verdict(&one, &probe, &[]), Ok(Writer::Probe));
         assert!(verdict(&one, &probe, &[]).unwrap_err().starts_with("rate-limited:"));
+    }
+
+    #[test]
+    fn public_mode_opens_the_relay_to_every_key() {
+        let service = Keys::generate();
+        let server = Keys::generate();
+        let client = Keys::generate();
+        let to_server = vec![Tag::public_key(server.public_key())];
+        let to_client = vec![Tag::public_key(client.public_key())];
+        let s = shared(&service, &[("DEADHOP_RELAY_PUBLIC", "on")]);
+
+        // Any key may talk to any other, and announce itself.
+        assert_eq!(
+            verdict(&s, &signed(&client, GIFT_WRAP, "r", to_server), &[]),
+            Ok(Writer::Open)
+        );
+        let reply = signed(&server, EPHEMERAL_GIFT_WRAP, "r", to_client.clone());
+        assert_eq!(verdict(&s, &reply, &[]), Ok(Writer::Open));
+        let other = s.judge(&reply, &[], true, Origin::V4(1), unix_now(), Instant::now());
+        assert!(
+            matches!(other, Verdict::Accept(Writer::Open)),
+            "AUTH as any key changes nothing"
+        );
+        assert_eq!(
+            verdict(&s, &signed(&server, 11316, "{}", vec![]), &[]),
+            Ok(Writer::Open)
+        );
+        assert!(verdict(&s, &signed(&server, 1, "hi", vec![]), &[])
+            .unwrap_err()
+            .starts_with("blocked:"));
+        let old = at(&server, GIFT_WRAP, "r", to_client.clone(), unix_now() - 3600);
+        assert!(verdict(&s, &old, &[]).unwrap_err().contains("too old"));
+
+        // Whitelisted keys keep what they had.
+        let to_service = vec![Tag::public_key(service.public_key())];
+        assert_eq!(
+            verdict(&s, &signed(&client, GIFT_WRAP, "r", to_service), &[]),
+            Ok(Writer::Public)
+        );
+        assert_eq!(
+            verdict(&s, &signed(&service, CTXVM, "r", to_client.clone()), &[]),
+            Ok(Writer::Trusted)
+        );
+        let probe = signed(
+            &client,
+            CTXVM,
+            PROBE_CONTENT,
+            vec![Tag::public_key(Keys::generate().public_key())],
+        );
+        assert_eq!(
+            verdict(&s, &probe, &[]),
+            Ok(Writer::Probe),
+            "health checks are still not kept"
+        );
+
+        // Open writes have their own size limit and share the address budget.
+        let s = shared(
+            &service,
+            &[
+                ("DEADHOP_RELAY_PUBLIC", "on"),
+                ("DEADHOP_RELAY_OPEN_MAX_EVENT_BYTES", "1024"),
+                ("DEADHOP_RELAY_PUBLIC_EVENTS_PER_MIN", "1"),
+            ],
+        );
+        let big = signed(&server, GIFT_WRAP, &"x".repeat(2000), to_client.clone());
+        assert!(verdict(&s, &big, &[]).unwrap_err().contains("limited to 1024 bytes"));
+        let e = signed(&server, GIFT_WRAP, "r", to_client);
+        assert_eq!(verdict(&s, &e, &[]), Ok(Writer::Open));
+        assert!(verdict(&s, &e, &[]).unwrap_err().starts_with("rate-limited:"));
     }
 
     #[test]

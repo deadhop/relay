@@ -1,6 +1,7 @@
 # deadhop relay with Docker Compose. Build from the repository root:
 #   docker compose -f relay/deploy/compose.yaml up -d --build
-# Set DEADHOP_RELAY_WHITELIST in a .env file next to this one, or in the shell.
+# Set DEADHOP_RELAY_WHITELIST (or DEADHOP_RELAY_PUBLIC=on) in a .env file next to
+# this one, or in the shell. The relay refuses to start with neither.
 services:
   relay:
     build:
@@ -16,7 +17,8 @@ services:
       nofile: { soft: 65536, hard: 65536 }
     # Empty values mean the relay's defaults (see the configuration docs).
     environment:
-      DEADHOP_RELAY_WHITELIST: ${DEADHOP_RELAY_WHITELIST:?list your deadhop invoice and/or admin keys}
+      DEADHOP_RELAY_WHITELIST: ${DEADHOP_RELAY_WHITELIST:-}
+      DEADHOP_RELAY_PUBLIC: ${DEADHOP_RELAY_PUBLIC:-}
       DEADHOP_RELAY_PUBLIC_URLS: ${DEADHOP_RELAY_PUBLIC_URLS:-}
       # Behind a reverse proxy, believe its X-Forwarded-For.
       DEADHOP_RELAY_TRUSTED_PROXIES: ${DEADHOP_RELAY_TRUSTED_PROXIES:-}
@@ -27,6 +29,8 @@ services:
       DEADHOP_RELAY_MESSAGES_PER_SEC: ${DEADHOP_RELAY_MESSAGES_PER_SEC:-}
       DEADHOP_RELAY_PUBLIC_EVENTS_PER_MIN: ${DEADHOP_RELAY_PUBLIC_EVENTS_PER_MIN:-}
       DEADHOP_RELAY_PUBLIC_MAX_EVENT_BYTES: ${DEADHOP_RELAY_PUBLIC_MAX_EVENT_BYTES:-}
+      DEADHOP_RELAY_OPEN_MAX_EVENT_BYTES: ${DEADHOP_RELAY_OPEN_MAX_EVENT_BYTES:-}
+      DEADHOP_RELAY_OPEN_STORE_MAX_EVENTS: ${DEADHOP_RELAY_OPEN_STORE_MAX_EVENTS:-}
       DEADHOP_RELAY_MIN_POW: ${DEADHOP_RELAY_MIN_POW:-}
       DEADHOP_RELAY_HOLD_SECS: ${DEADHOP_RELAY_HOLD_SECS:-}
       DEADHOP_RELAY_ALLOW_PROBE: ${DEADHOP_RELAY_ALLOW_PROBE:-}

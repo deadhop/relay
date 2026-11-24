@@ -1,5 +1,5 @@
 # systemd unit for a small VPS. Install the binary at /usr/local/bin/deadhop-relay,
-# put your settings in /etc/deadhop-relay.env (at least DEADHOP_RELAY_WHITELIST), then:
+# put your settings in /etc/deadhop-relay.env (at least DEADHOP_RELAY_WHITELIST or DEADHOP_RELAY_PUBLIC=on), then:
 #   systemctl enable --now deadhop-relay
 [Unit]
 Description=deadhop relay (Nostr relay for deadhop ContextVM traffic)

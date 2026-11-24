@@ -121,6 +121,7 @@ pub fn stats(sh: &Shared, operator: bool) -> Value {
         "version": VERSION,
         "uptime_secs": now.saturating_sub(sh.started_unix),
         "whitelisted_keys": sh.cfg.whitelist.len(),
+        "public": sh.cfg.public,
         "connections": s.connections_open.load(Relaxed),
         "subscriptions": sh.hub.len(),
         "events": s.events_total(),
@@ -157,6 +158,7 @@ pub fn stats(sh: &Shared, operator: bool) -> Value {
                 "whitelisted": s.events_trusted.load(Relaxed),
                 "public": s.events_public.load(Relaxed),
                 "health_checks": s.events_probe.load(Relaxed),
+                "open": s.events_open.load(Relaxed),
             },
             "held": s.held.load(Relaxed),
             "stored": lock(&sh.store).len(),
@@ -195,6 +197,8 @@ fn limits(sh: &Shared) -> Value {
         "handshake_secs": l.handshake_secs,
         "store_max_events": l.store_max_events,
         "public_store_max_events": l.public_store_max_events,
+        "open_max_event_bytes": l.open_max_event_bytes,
+        "open_store_max_events": l.open_store_max_events,
         "messages_per_sec": l.messages_per_sec,
         "public_events_per_min": l.public_events_per_min,
         "probes_per_min": l.probes_per_min,
@@ -304,9 +308,7 @@ pub fn status_page(sh: &Shared) -> String {
     };
     let body = format!(
         "<h1>{name}</h1><p class=\"lead\">{desc}</p>{urls}{tiles}{history}\
-<h2>What this relay carries</h2><div class=\"card\"><p>Only <a href=\"https://contextvm.org\">ContextVM</a> messages \
-(kinds 25910, 1059 and 21059) to and from the {n} key{s} its operator whitelisted, and those keys' announcements. \
-Anyone may send a request to a whitelisted key; only a whitelisted key may answer. Everything else is refused.</p>\
+<h2>What this relay carries</h2><div class=\"card\"><p>{carries}</p>\
 <p class=\"muted\">Nothing is written to disk. Gift wraps are kept in memory for {ttl}; other messages nobody was \
 listening for are held for {hold} seconds. Relay information (NIP-11): request this page with \
 <code>Accept: application/nostr+json</code>.</p></div>",
@@ -314,12 +316,29 @@ listening for are held for {hold} seconds. Relay information (NIP-11): request t
         desc = esc(&sh.cfg.description),
         tiles = tiles(&v),
         history = history(sh),
-        n = sh.cfg.whitelist.len(),
-        s = if sh.cfg.whitelist.len() == 1 { "" } else { "s" },
+        carries = carries(sh),
         ttl = uptime(sh.cfg.limits.store_ttl_secs),
         hold = sh.cfg.limits.hold_secs,
     );
     layout(sh, &sh.cfg.name, "relay", &body)
+}
+
+/// What the status page says the relay carries, by mode.
+fn carries(sh: &Shared) -> String {
+    let cvm = "<a href=\"https://contextvm.org\">ContextVM</a> messages (kinds 25910, 1059 and 21059)";
+    let n = sh.cfg.whitelist.len();
+    let keys = format!("the {n} key{} its operator whitelisted", if n == 1 { "" } else { "s" });
+    match (sh.cfg.public, n) {
+        (false, _) => format!(
+            "Only {cvm} to and from {keys}, and those keys' announcements. Anyone may send a request to a \
+             whitelisted key; only a whitelisted key may answer. Everything else is refused."
+        ),
+        (true, 0) => format!("Only {cvm} and ContextVM announcements, for any key. Everything else is refused."),
+        (true, _) => format!(
+            "Only {cvm} and ContextVM announcements, for any key. Requests to {keys} are kept for those keys \
+             alone to read; everything else here is readable by anyone. Everything else is refused."
+        ),
+    }
 }
 
 /// The operator page: the public numbers plus the whitelist and refusals.
@@ -350,6 +369,7 @@ pub fn operator_page(sh: &Shared) -> String {
         ("from whitelisted keys", v["events_by_writer"]["whitelisted"].clone()),
         ("requests from anyone", v["events_by_writer"]["public"].clone()),
         ("relay health checks", v["events_by_writer"]["health_checks"].clone()),
+        ("between other keys", v["events_by_writer"]["open"].clone()),
         ("held for a later subscriber", v["held"].clone()),
         ("in memory now", v["stored"].clone()),
         ("connections since start", v["connections_total"].clone()),
@@ -565,6 +585,25 @@ mod tests {
         assert_eq!(route(&sh, &post, false).status, 405);
         let two = shared(&service, &[]);
         assert!(body(&route(&two, &get("/", None), false)).contains("1 key its"));
+    }
+
+    #[test]
+    fn public_mode_says_so() {
+        let service = Keys::generate();
+        let mixed = shared(&service, &[("DEADHOP_RELAY_PUBLIC", "on")]);
+        let html = body(&route(&mixed, &get("/", None), false));
+        assert!(html.contains("for any key") && html.contains("1 key its operator whitelisted are kept"));
+        let open = crate::state::Shared::new(crate::config::tests::config(&[("DEADHOP_RELAY_PUBLIC", "on")]).unwrap());
+        let html = body(&route(&open, &get("/", None), false));
+        assert!(html.contains("for any key") && !html.contains("whitelisted"), "{html}");
+        let v: Value = serde_json::from_str(&body(&route(&open, &get("/stats.json", None), true))).unwrap();
+        assert_eq!(
+            (v["public"].clone(), v["whitelisted_keys"].clone()),
+            (json!(true), json!(0))
+        );
+        assert_eq!(v["events_by_writer"]["open"], json!(0));
+        assert_eq!(v["limits"]["open_store_max_events"], json!(5_000));
+        assert!(body(&route(&open, &get("/", None), true)).contains("between other keys"));
     }
 
     #[test]

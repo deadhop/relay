@@ -1,5 +1,6 @@
 //! Configuration, read once at startup from `DEADHOP_RELAY_*` environment
-//! variables. The relay does not start without a whitelist.
+//! variables. The relay does not start without a whitelist unless its
+//! operator opens it to every key (`DEADHOP_RELAY_PUBLIC=on`).
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -61,6 +62,12 @@ pub struct Limits {
     pub hold_secs: u64,
     pub store_max_events: usize,
     pub public_store_max_events: usize,
+    /// Public mode: the largest event a key that is not whitelisted may send
+    /// to another such key (a whole service reply, so larger than requests).
+    pub open_max_event_bytes: usize,
+    /// Public mode: events kept for keys that are not whitelisted, their
+    /// announcements included. Separate, so they never evict the rest.
+    pub open_store_max_events: usize,
     pub idle_secs: u64,
     pub handshake_secs: u64,
     pub auth_grace_secs: u64,
@@ -88,6 +95,8 @@ impl Default for Limits {
             hold_secs: 30,
             store_max_events: 20_000,
             public_store_max_events: 1_000,
+            open_max_event_bytes: 128 * 1024,
+            open_store_max_events: 5_000,
             idle_secs: 300,
             handshake_secs: 10,
             auth_grace_secs: 5,
@@ -104,6 +113,8 @@ pub struct Config {
     /// The operator page, served without sign-in: keep it on loopback.
     pub stats_listen: Option<SocketAddr>,
     pub whitelist: Whitelist,
+    /// Carry ContextVM traffic for every key, not only whitelisted ones.
+    pub public: bool,
     pub name: String,
     pub description: String,
     /// The addresses clients reach this relay at (for NIP-42 and the status page).
@@ -117,6 +128,7 @@ pub struct Config {
 
 pub const ENV_WHITELIST: &str = "DEADHOP_RELAY_WHITELIST";
 pub const ENV_WHITELIST_FILE: &str = "DEADHOP_RELAY_WHITELIST_FILE";
+pub const ENV_PUBLIC: &str = "DEADHOP_RELAY_PUBLIC";
 
 /// Decode an `npub1…` or 64-character hex public key.
 pub fn parse_key(s: &str) -> Option<Key> {
@@ -152,6 +164,7 @@ fn entry(raw: &str, n: usize) -> Result<(Key, String), String> {
 }
 
 /// Read the whitelist from the environment value and the file's lines.
+/// It may be empty; [`Config::from_env`] decides whether that is allowed.
 pub fn whitelist(inline: Option<&str>, file: Option<&str>) -> Result<Whitelist, String> {
     let mut wl = Whitelist::default();
     let lines = inline
@@ -164,12 +177,6 @@ pub fn whitelist(inline: Option<&str>, file: Option<&str>) -> Result<Whitelist, 
             let (k, l) = entry(line, wl.len() + 1)?;
             wl.add(k, l);
         }
-    }
-    if wl.is_empty() {
-        return Err(format!(
-            "{ENV_WHITELIST} (or {ENV_WHITELIST_FILE}) is required: list the deadhop invoice and/or admin keys this \
-             relay serves, for example {ENV_WHITELIST}=invoices=npub1…,admin=npub1…. The relay does not start without one."
-        ));
     }
     Ok(wl)
 }
@@ -226,6 +233,14 @@ impl Config {
             None => None,
         };
         let whitelist = whitelist(get(ENV_WHITELIST).as_deref(), file.as_deref())?;
+        let public = flag(get, ENV_PUBLIC, false)?;
+        if whitelist.is_empty() && !public {
+            return Err(format!(
+                "{ENV_WHITELIST} (or {ENV_WHITELIST_FILE}) is required: list the deadhop invoice and/or admin keys this \
+                 relay serves, for example {ENV_WHITELIST}=invoices=npub1…,admin=npub1…. To carry ContextVM traffic \
+                 for every key instead, set {ENV_PUBLIC}=on. The relay does not start without one or the other."
+            ));
+        }
         let d = Limits::default();
         let mb = 1024 * 1024;
         let limits = Limits {
@@ -245,6 +260,8 @@ impl Config {
             hold_secs: num(get, "HOLD_SECS", d.hold_secs, 0, 3_600)?,
             store_max_events: num(get, "STORE_MAX_EVENTS", d.store_max_events, 0, 10_000_000)?,
             public_store_max_events: num(get, "PUBLIC_STORE_MAX_EVENTS", d.public_store_max_events, 0, 10_000_000)?,
+            open_max_event_bytes: num(get, "OPEN_MAX_EVENT_BYTES", d.open_max_event_bytes, 512, 16 * mb)?,
+            open_store_max_events: num(get, "OPEN_STORE_MAX_EVENTS", d.open_store_max_events, 0, 10_000_000)?,
             idle_secs: num(get, "IDLE_SECS", d.idle_secs, 2, 86_400)?,
             handshake_secs: num(get, "HANDSHAKE_SECS", d.handshake_secs, 1, 120)?,
             auth_grace_secs: num(get, "AUTH_GRACE_SECS", d.auth_grace_secs, 1, 120)?,
@@ -276,9 +293,14 @@ impl Config {
             listen: addr(get, "DEADHOP_RELAY_LISTEN", "0.0.0.0:7447")?.ok_or("DEADHOP_RELAY_LISTEN cannot be off")?,
             stats_listen: addr(get, "DEADHOP_RELAY_STATS_LISTEN", "127.0.0.1:7448")?,
             whitelist,
+            public,
             name,
             description: get("DEADHOP_RELAY_DESCRIPTION").unwrap_or_else(|| {
-                "Carries deadhop ContextVM requests and replies for its whitelisted keys only.".into()
+                if public {
+                    "Carries ContextVM requests, replies and announcements for any key.".into()
+                } else {
+                    "Carries deadhop ContextVM requests and replies for its whitelisted keys only.".into()
+                }
             }),
             public_urls,
             trusted_proxies,
@@ -333,6 +355,33 @@ pub(crate) mod tests {
             "{e}"
         );
         assert!(config(&[(ENV_WHITELIST, " , # nothing")]).is_err());
+        assert!(config(&[(ENV_PUBLIC, "off")]).is_err(), "public mode is opt-in");
+        assert!(config(&[(ENV_PUBLIC, "maybe")])
+            .unwrap_err()
+            .contains("DEADHOP_RELAY_PUBLIC"));
+    }
+
+    #[test]
+    fn public_mode_needs_no_whitelist() {
+        let c = config(&[(ENV_PUBLIC, "on")]).unwrap();
+        assert!(c.public && c.whitelist.is_empty());
+        assert!(c.description.contains("any key"), "{}", c.description);
+        let c = config(&[(ENV_PUBLIC, "on"), (ENV_WHITELIST, HEX)]).unwrap();
+        assert!(c.public && c.whitelist.len() == 1, "both at once");
+        let c = config(&[(ENV_WHITELIST, HEX)]).unwrap();
+        assert!(!c.public && c.description.contains("whitelisted keys only"));
+        assert_eq!(c.limits.open_max_event_bytes, 128 * 1024);
+        assert_eq!(c.limits.open_store_max_events, 5_000);
+        let c = config(&[
+            (ENV_PUBLIC, "on"),
+            ("DEADHOP_RELAY_OPEN_MAX_EVENT_BYTES", "4096"),
+            ("DEADHOP_RELAY_OPEN_STORE_MAX_EVENTS", "7"),
+        ])
+        .unwrap();
+        assert_eq!(
+            (c.limits.open_max_event_bytes, c.limits.open_store_max_events),
+            (4096, 7)
+        );
     }
 
     #[test]

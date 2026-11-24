@@ -85,6 +85,8 @@ pub struct Stats {
     pub events_trusted: AtomicU64,
     pub events_public: AtomicU64,
     pub events_probe: AtomicU64,
+    /// Public mode: events between keys that are not whitelisted.
+    pub events_open: AtomicU64,
     pub refused: [AtomicU64; 7],
     pub deliveries: AtomicU64,
     /// Accepted events not queued to a live matching subscription. Should stay 0.
@@ -163,7 +165,10 @@ impl Stats {
     }
 
     pub fn events_total(&self) -> u64 {
-        self.events_trusted.load(Relaxed) + self.events_public.load(Relaxed) + self.events_probe.load(Relaxed)
+        self.events_trusted.load(Relaxed)
+            + self.events_public.load(Relaxed)
+            + self.events_probe.load(Relaxed)
+            + self.events_open.load(Relaxed)
     }
 }
 

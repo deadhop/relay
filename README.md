@@ -18,7 +18,7 @@ deadhop talks only over [ContextVM](https://contextvm.org) (MCP over Nostr), so 
 - **answers** from those keys only, either signed by them or sent on a connection that proved the key with NIP-42 AUTH;
 - those keys' **announcements**.
 
-It refuses everything else, before checking any signature. Without a whitelist it does not start.
+It refuses everything else, before checking any signature. Without a whitelist it does not start, unless you set `DEADHOP_RELAY_PUBLIC=on`: it then carries ContextVM traffic for any key, under public limits, and whitelisted keys keep their privileges ([public mode](https://deadhop.run/relay/docs/security.html#public-mode)).
 
 ```text
 customer / dashboard ──wss──▶ deadhop-relay ◀──wss── deadhop service (AUTH as a whitelisted key)

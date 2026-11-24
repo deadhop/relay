@@ -177,6 +177,119 @@ async fn a_contextvm_round_trip_through_nostr_sdk() {
     r.stop().await;
 }
 
+#[tokio::test]
+async fn a_public_relay_carries_any_key_without_a_whitelist() {
+    let server_keys = Keys::generate();
+    let client_keys = Keys::generate();
+    let cfg = config(&[
+        ("DEADHOP_RELAY_PUBLIC", "on"),
+        ("DEADHOP_RELAY_LISTEN", "127.0.0.1:0"),
+        ("DEADHOP_RELAY_STATS_LISTEN", "off"),
+    ])
+    .unwrap();
+    let r = server::start(cfg).await.unwrap();
+
+    // Neither side is whitelisted; both still authenticate when challenged.
+    let server = Client::new(server_keys.clone());
+    server.add_relay(url(&r)).await.unwrap();
+    server.connect().await;
+    server
+        .subscribe(Filter::new().pubkey(server_keys.public_key()), None)
+        .await
+        .unwrap();
+    let mut server_notes = server.notifications();
+    let client = Client::new(client_keys.clone());
+    client.add_relay(url(&r)).await.unwrap();
+    client.connect().await;
+    client
+        .subscribe(Filter::new().pubkey(client_keys.public_key()), None)
+        .await
+        .unwrap();
+    let mut client_notes = client.notifications();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let request = wrap_to(&server_keys.public_key(), 1059, "request");
+    assert!(!client.send_event(&request).await.unwrap().success.is_empty());
+    assert_eq!(wait_for(&mut server_notes, request.id).await.content, "request");
+    let reply = wrap_to(&client_keys.public_key(), 21059, "reply");
+    assert!(!server.send_event(&reply).await.unwrap().success.is_empty());
+    assert_eq!(wait_for(&mut client_notes, reply.id).await.content, "reply");
+
+    // The server's announcement, found by its author with no AUTH at all.
+    let announce = EventBuilder::new(Kind::Custom(11316), "{}")
+        .sign_with_keys(&server_keys)
+        .unwrap();
+    assert!(!server.send_event(&announce).await.unwrap().success.is_empty());
+    let mut ws = raw(&r).await;
+    send(
+        &mut ws,
+        json!(["REQ", "a", {"authors": [server_keys.public_key().to_hex()]}]),
+    )
+    .await;
+    let got = next(&mut ws).await;
+    assert_eq!(
+        (got[0].as_str(), got[2]["id"].as_str()),
+        (Some("EVENT"), Some(announce.id.to_hex().as_str()))
+    );
+    // So is the request stored for the server: open traffic is readable by anyone.
+    send(
+        &mut ws,
+        json!(["REQ", "b", {"#p": [server_keys.public_key().to_hex()]}]),
+    )
+    .await;
+    let got = loop {
+        let m = next(&mut ws).await;
+        if m[0] == "EVENT" && m[1] == "b" {
+            break m;
+        }
+    };
+    assert_eq!(got[2]["id"], json!(request.id.to_hex()));
+
+    let s = &r.shared.stats;
+    assert_eq!(s.events_open.load(Relaxed), 3);
+    assert_eq!(s.dropped.load(Relaxed), 0);
+    server.disconnect().await;
+    client.disconnect().await;
+    r.stop().await;
+}
+
+#[tokio::test]
+async fn a_delivered_ephemeral_reply_is_not_sent_again_after_a_reconnect() {
+    let service = Keys::generate();
+    let client = Keys::generate();
+    let r = start(&service, &[]).await;
+    let sub = json!(["REQ", "mine", {"#p": [client.public_key().to_hex()], "since": 0}]);
+    let mut first = raw(&r).await;
+    send(&mut first, sub.clone()).await;
+    assert_eq!(next(&mut first).await[0], "EOSE");
+    let delivered = EventBuilder::new(Kind::Custom(21059), "delivered")
+        .tag(Tag::public_key(client.public_key()))
+        .sign_with_keys(&service)
+        .unwrap();
+    let mut svc = raw(&r).await;
+    send(&mut svc, json!(["EVENT", ev(&delivered)])).await;
+    assert_eq!(next(&mut first).await[2]["content"], "delivered");
+    assert_eq!(next(&mut svc).await[2], json!(true));
+    drop(first);
+    // Sent while nobody listens: held for the client's next subscription.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let missed = EventBuilder::new(Kind::Custom(21059), "missed")
+        .tag(Tag::public_key(client.public_key()))
+        .sign_with_keys(&service)
+        .unwrap();
+    send(&mut svc, json!(["EVENT", ev(&missed)])).await;
+    assert_eq!(next(&mut svc).await[2], json!(true));
+    let mut again = raw(&r).await;
+    send(&mut again, sub).await;
+    assert_eq!(next(&mut again).await[2]["content"], "missed");
+    assert_eq!(
+        next(&mut again).await[0],
+        "EOSE",
+        "the delivered reply is not sent again"
+    );
+    r.stop().await;
+}
+
 async fn wait_for(
     notes: &mut tokio::sync::broadcast::Receiver<RelayPoolNotification>,
     id: EventId,

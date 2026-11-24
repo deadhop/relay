@@ -2,7 +2,9 @@
 //! and ephemeral messages nobody was subscribed to, for a few seconds.
 //!
 //! Events written by unauthenticated clients have their own budget, so a
-//! flood of them can never push out what a whitelisted key wrote.
+//! flood of them can never push out what a whitelisted key wrote. In public
+//! mode, traffic between keys that are not whitelisted has a third budget,
+//! announcements included, so it can never push out either of the others.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -19,6 +21,9 @@ pub enum Writer {
     Public,
     /// deadhop's relay health check.
     Probe,
+    /// Public mode: a key that is not whitelisted, to another such key (or
+    /// its own announcement). Anyone may read it, as on any open relay.
+    Open,
 }
 
 impl Writer {
@@ -70,25 +75,43 @@ impl Seen {
 pub struct Store {
     trusted: VecDeque<Stored>,
     public: VecDeque<Stored>,
+    open: VecDeque<Stored>,
     replaceable: HashMap<(Key, u16), Stored>,
     trusted_cap: usize,
     public_cap: usize,
+    open_cap: usize,
 }
 
 impl Store {
-    pub fn new(trusted_cap: usize, public_cap: usize) -> Store {
+    pub fn new(trusted_cap: usize, public_cap: usize, open_cap: usize) -> Store {
         Store {
             trusted: VecDeque::new(),
             public: VecDeque::new(),
+            open: VecDeque::new(),
             replaceable: HashMap::new(),
             trusted_cap,
             public_cap,
+            open_cap,
         }
     }
 
     /// Keep `event` until `expires` (Unix seconds). Replaceable events replace
-    /// an older one by the same author and are kept until replaced.
+    /// an older one by the same author and are kept until replaced; those by
+    /// keys that are not whitelisted live in the capped open budget, so minted
+    /// keys cannot grow the store without bound.
     pub fn insert(&mut self, event: Arc<Event>, writer: Writer, expires: u64) {
+        if writer == Writer::Open && event.is_replaceable() {
+            let same = |s: &Stored| s.event.pubkey == event.pubkey && s.event.kind == event.kind;
+            if self
+                .open
+                .iter()
+                .any(|s| same(s) && s.event.created_at > event.created_at)
+            {
+                return;
+            }
+            self.open.retain(|s| !same(s));
+            return self.push(event, writer, u64::MAX);
+        }
         if event.is_replaceable() {
             let k = (event.pubkey, event.kind);
             if self
@@ -107,8 +130,13 @@ impl Store {
             }
             return;
         }
+        self.push(event, writer, expires);
+    }
+
+    fn push(&mut self, event: Arc<Event>, writer: Writer, expires: u64) {
         let (ring, cap) = match writer {
             Writer::Public => (&mut self.public, self.public_cap),
+            Writer::Open => (&mut self.open, self.open_cap),
             _ => (&mut self.trusted, self.trusted_cap),
         };
         ring.push_back(Stored { event, writer, expires });
@@ -117,14 +145,29 @@ impl Store {
         }
     }
 
+    /// Forget a kept event: an ephemeral one that a live subscriber received,
+    /// so a client that reconnects is not sent another session's replies.
+    pub fn remove(&mut self, id: &Key, writer: Writer) {
+        let ring = match writer {
+            Writer::Public => &mut self.public,
+            Writer::Open => &mut self.open,
+            _ => &mut self.trusted,
+        };
+        // Just added, so it is near the end.
+        if let Some(i) = ring.iter().rposition(|s| s.event.id == *id) {
+            ring.remove(i);
+        }
+    }
+
     /// Drop what has expired.
     pub fn purge(&mut self, now: u64) {
         self.trusted.retain(|s| s.expires > now);
         self.public.retain(|s| s.expires > now);
+        self.open.retain(|s| s.expires > now);
     }
 
     pub fn len(&self) -> usize {
-        self.trusted.len() + self.public.len() + self.replaceable.len()
+        self.trusted.len() + self.public.len() + self.open.len() + self.replaceable.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -138,6 +181,7 @@ impl Store {
             .trusted
             .iter()
             .chain(self.public.iter())
+            .chain(self.open.iter())
             .chain(self.replaceable.values())
             .filter(|s| s.expires > now && filters.iter().any(|f| f.matches(&s.event)))
             .filter(|s| s.writer.may_read(&s.event.recipients(), authed))
@@ -183,7 +227,7 @@ mod tests {
     #[test]
     fn public_writes_are_read_only_by_their_recipient() {
         let service = Keys::generate();
-        let mut st = Store::new(10, 10);
+        let mut st = Store::new(10, 10, 10);
         let e = wrap(&service, GIFT_WRAP);
         st.insert(e.clone(), Writer::Public, 100);
         assert!(st.query(&to(&service), &[], 0, 10).is_empty(), "not authenticated");
@@ -205,7 +249,7 @@ mod tests {
     fn floods_of_public_writes_cannot_evict_trusted_ones() {
         let service = Keys::generate();
         let client = Keys::generate();
-        let mut st = Store::new(2, 2);
+        let mut st = Store::new(2, 2, 2);
         let reply = wrap(&client, EPHEMERAL_GIFT_WRAP);
         st.insert(reply.clone(), Writer::Trusted, 100);
         for _ in 0..10 {
@@ -220,9 +264,62 @@ mod tests {
     }
 
     #[test]
+    fn open_writes_are_read_by_anyone_and_evict_only_each_other() {
+        let service = Keys::generate();
+        let client = Keys::generate();
+        let mut st = Store::new(1, 1, 2);
+        let reply = wrap(&client, GIFT_WRAP);
+        st.insert(reply.clone(), Writer::Trusted, 100);
+        let request = wrap(&service, GIFT_WRAP);
+        st.insert(request.clone(), Writer::Public, 100);
+        let open = wrap(&client, GIFT_WRAP);
+        st.insert(open.clone(), Writer::Open, 100);
+        assert!(st.query(&to(&client), &[], 0, 10).contains(&open), "no AUTH needed");
+        for _ in 0..10 {
+            st.insert(wrap(&Keys::generate(), GIFT_WRAP), Writer::Open, 100);
+        }
+        assert_eq!(st.len(), 4, "1 trusted + 1 public + 2 open");
+        assert_eq!(st.query(&to(&client), &[], 0, 10), vec![reply]);
+        assert_eq!(
+            st.query(&to(&service), &[service.public_key().to_bytes()], 0, 10),
+            vec![request]
+        );
+        st.purge(100);
+        assert!(st.is_empty());
+    }
+
+    #[test]
+    fn open_announcements_keep_the_newest_within_their_budget() {
+        let server = Keys::generate();
+        let mk = |k: &Keys, ts: u64| {
+            let e = nostr_sdk::prelude::EventBuilder::new(nostr_sdk::prelude::Kind::Custom(11316), "{}")
+                .custom_created_at(nostr_sdk::prelude::Timestamp::from(ts))
+                .sign_with_keys(k)
+                .unwrap();
+            Arc::new(crate::event::tests::from_sdk(&e))
+        };
+        let mut st = Store::new(10, 10, 3);
+        st.insert(mk(&server, 10), Writer::Open, 0);
+        st.insert(mk(&server, 20), Writer::Open, 0);
+        st.insert(mk(&server, 15), Writer::Open, 0);
+        let by = vec![Filter::parse(&json!({"authors": [server.public_key().to_hex()]})).unwrap()];
+        let got = st.query(&by, &[], 1_000_000, 10);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].created_at, 20);
+        st.purge(u64::MAX - 1);
+        assert_eq!(st.len(), 1, "kept until replaced or pushed out");
+        // A flood of minted keys stays within the open budget.
+        for _ in 0..20 {
+            st.insert(mk(&Keys::generate(), 30), Writer::Open, 0);
+        }
+        assert_eq!(st.len(), 3);
+        assert!(st.query(&by, &[], 1_000_000, 10).is_empty(), "pushed out");
+    }
+
+    #[test]
     fn replaceable_events_keep_the_newest() {
         let service = Keys::generate();
-        let mut st = Store::new(0, 0);
+        let mut st = Store::new(0, 0, 0);
         let mk = |ts: u64| {
             let e = nostr_sdk::prelude::EventBuilder::new(nostr_sdk::prelude::Kind::Custom(11316), "{}")
                 .custom_created_at(nostr_sdk::prelude::Timestamp::from(ts))

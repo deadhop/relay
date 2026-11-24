@@ -1,5 +1,6 @@
 //! deadhop relay: a small Nostr relay that carries only deadhop's ContextVM
-//! traffic (requests to, and replies from, the keys its operator whitelists).
+//! traffic (requests to, and replies from, the keys its operator whitelists),
+//! or, in public mode, ContextVM traffic for any key.
 
 pub mod config;
 pub mod event;
@@ -28,6 +29,7 @@ usage:
 
 Configuration comes from DEADHOP_RELAY_* environment variables. A whitelist is
 required: DEADHOP_RELAY_WHITELIST=invoices=npub1...,admin=npub1...
+unless the relay is public (DEADHOP_RELAY_PUBLIC=on): ContextVM traffic for any key.
 Docs: https://deadhop.run/relay/docs/";
 
 /// What `check` prints: the settings that matter, one per line.
@@ -36,6 +38,14 @@ pub fn summary(c: &Config) -> String {
     s += &format!(
         "operator page {}\n",
         c.stats_listen.map_or("off".into(), |a| a.to_string())
+    );
+    s += &format!(
+        "mode          {}\n",
+        if c.public {
+            "public: ContextVM traffic for any key"
+        } else {
+            "whitelist only"
+        }
     );
     for (k, label) in c.whitelist.entries() {
         s += &format!("whitelist     {label}: {}\n", npub(k));
@@ -67,8 +77,13 @@ pub async fn serve(cfg: Config) -> u8 {
         }
     };
     let keys = r.shared.cfg.whitelist.len();
+    let mode = if r.shared.cfg.public {
+        "any key (public)"
+    } else {
+        "whitelisted keys only"
+    };
     eprintln!(
-        "deadhop-relay {}: listening on {} for {keys} whitelisted key(s)",
+        "deadhop-relay {}: listening on {} for {mode}, {keys} whitelisted",
         web::VERSION,
         r.addr
     );

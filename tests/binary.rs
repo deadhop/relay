@@ -53,18 +53,33 @@ fn check_prints_the_configuration() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("whitelist     admin: npub1"));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("whitelist     admin: npub1") && stdout.contains("mode          whitelist only"));
 }
 
-fn stops_on(signal: &str) {
-    let mut child = relay()
-        .env("DEADHOP_RELAY_WHITELIST", KEY)
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+#[test]
+fn check_prints_public_mode() {
+    let out = relay().arg("check").env("DEADHOP_RELAY_PUBLIC", "on").output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        stdout.contains("mode          public: ContextVM traffic for any key"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("whitelist "), "{stdout}");
+}
+
+fn stops_on(signal: &str, env: (&str, &str)) {
+    let mut child = relay().env(env.0, env.1).stderr(Stdio::piped()).spawn().unwrap();
     let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
     let first = lines.next().unwrap().unwrap();
     assert!(first.contains("listening on 127.0.0.1:"), "{first}");
+    let mode = if env.0 == "DEADHOP_RELAY_PUBLIC" {
+        "for any key (public), 0 whitelisted"
+    } else {
+        "for whitelisted keys only, 1 whitelisted"
+    };
+    assert!(first.contains(mode), "{first}");
     assert!(lines.next().unwrap().unwrap().contains("operator page"));
     assert!(Command::new("kill")
         .args([signal, &child.id().to_string()])
@@ -77,12 +92,12 @@ fn stops_on(signal: &str) {
 
 #[test]
 fn stops_on_sigterm() {
-    stops_on("-TERM");
+    stops_on("-TERM", ("DEADHOP_RELAY_WHITELIST", KEY));
 }
 
 #[test]
 fn stops_on_sigint() {
-    stops_on("-INT");
+    stops_on("-INT", ("DEADHOP_RELAY_PUBLIC", "on"));
 }
 
 #[test]
