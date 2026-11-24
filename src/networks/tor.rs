@@ -2,37 +2,42 @@
 //! listener, with `HiddenServiceExportCircuitID haproxy`.
 //!
 //! Every connection then starts with a PROXY protocol (v1) line, written by
-//! Tor before anything the client sends:
+//! Tor before anything the client sends. The circuit's global identifier is
+//! the low 32 bits of the source address, inside `fc00:dead:beef:4dad::/64`:
 //!
 //! ```text
-//! PROXY TCP6 fc00:dead:beef:4dad:<gid high 16 bits>:<gid low 16 bits> ::1 <src port> <onion port>\r\n
+//! PROXY TCP6 fc00:dead:beef:4dad::0:29a ::1 666 42\r\n      (circuit 666, onion port 42)
 //! ```
 //!
-//! The circuit's global identifier is the only thing that tells two clients
-//! of an onion service apart. The address is not valid IPv6 (six groups and
-//! no `::`), so it is read here rather than parsed as an address.
+//! (Tor's `export_hs_client_circuit_id`, and the lines its unit tests expect.)
+//! The circuit is the only thing that tells two clients of an onion service
+//! apart.
 
 use std::io;
+use std::net::Ipv6Addr;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// A PROXY v1 line is at most 107 bytes, the CRLF included.
 pub const MAX_LINE: usize = 107;
 
-const PREFIX: &str = "PROXY TCP6 fc00:dead:beef:4dad:";
+/// The /64 Tor puts circuits in.
+const CIRCUITS: u64 = 0xfc00_dead_beef_4dad;
 
 /// The circuit identifier in Tor's PROXY line (without its CRLF).
 pub fn circuit(line: &str) -> Option<u32> {
-    let rest = line.strip_prefix(PREFIX)?;
-    let mut parts = rest.split(' ');
-    let src = parts.next()?;
-    let (hi, lo) = src.split_once(':')?;
-    let hi = u16::from_str_radix(hi, 16).ok()?;
-    let lo = u16::from_str_radix(lo, 16).ok()?;
-    let rest: Vec<&str> = parts.collect();
-    // Destination address, source port, destination port.
-    let ports_ok = rest.len() == 3 && rest[1].parse::<u16>().is_ok() && rest[2].parse::<u16>().is_ok();
-    ports_ok.then_some((u32::from(hi) << 16) | u32::from(lo))
+    let parts: Vec<&str> = line.split(' ').collect();
+    let [proxy, family, src, _dst, sport, dport] = parts[..] else {
+        return None;
+    };
+    let src = src.parse::<Ipv6Addr>().ok().map(u128::from)?;
+    let ok = proxy == "PROXY"
+        && family == "TCP6"
+        && (src >> 64) as u64 == CIRCUITS
+        && (src >> 32) as u32 == 0
+        && sport.parse::<u16>().is_ok()
+        && dport.parse::<u16>().is_ok();
+    ok.then_some(src as u32)
 }
 
 /// Read Tor's PROXY line. Gives the circuit and whatever followed the line
@@ -63,26 +68,29 @@ mod tests {
 
     #[test]
     fn circuits_from_tor_lines() {
-        // What Tor writes for global identifier 0x00010029 (65,577) on port 80.
+        // The lines Tor's own unit test (test_hs_service.c) expects, for
+        // circuits 666, UINT32_MAX, UINT16_MAX and UINT16_MAX + 7.
+        assert_eq!(circuit("PROXY TCP6 fc00:dead:beef:4dad::0:29a ::1 666 42"), Some(666));
         assert_eq!(
-            circuit("PROXY TCP6 fc00:dead:beef:4dad:1:29 ::1 41 80"),
-            Some(0x0001_0029)
-        );
-        assert_eq!(circuit("PROXY TCP6 fc00:dead:beef:4dad:0:0 ::1 1 80"), Some(0));
-        assert_eq!(
-            circuit("PROXY TCP6 fc00:dead:beef:4dad:ffff:ffff ::1 65535 7447"),
+            circuit("PROXY TCP6 fc00:dead:beef:4dad::ffff:ffff ::1 65535 42"),
             Some(u32::MAX)
         );
+        assert_eq!(
+            circuit("PROXY TCP6 fc00:dead:beef:4dad::0:ffff ::1 65535 42"),
+            Some(65_535)
+        );
+        assert_eq!(circuit("PROXY TCP6 fc00:dead:beef:4dad::1:6 ::1 6 42"), Some(65_542));
         for bad in [
             "PROXY TCP4 1.2.3.4 5.6.7.8 1 2",
-            "PROXY TCP6 fc00:dead:beef:4dad:1 ::1 1 80",
-            "PROXY TCP6 fc00:dead:beef:4dad:1:2:3 ::1 1 80",
-            "PROXY TCP6 fc00:dead:beef:4dad:g:1 ::1 1 80",
-            "PROXY TCP6 fc00:dead:beef:4dad:1:g ::1 1 80",
-            "PROXY TCP6 fc00:dead:beef:4dad:1:2 ::1 1",
-            "PROXY TCP6 fc00:dead:beef:4dad:1:2 ::1 x 80",
-            "PROXY TCP6 fc00:dead:beef:4dad:1:2 ::1 1 x",
-            "PROXY TCP6 fc00:dead:beef:4dad:1:2",
+            "PROXY TCP6 fc00:dead:beef:4dad:1:29 ::1 41 80",
+            "PROXY TCP6 fc00:dead:beef:4dae::1:6 ::1 6 42",
+            "PROXY TCP6 fc00:dead:beef:4dad:0:1:0:6 ::1 6 42",
+            "PROXY TCP6 2001:db8::1 ::1 6 42",
+            "PROXY TCP6 fc00:dead:beef:4dad::1:6 ::1 x 42",
+            "PROXY TCP6 fc00:dead:beef:4dad::1:6 ::1 6 x",
+            "PROXY TCP6 fc00:dead:beef:4dad::1:6 ::1 6",
+            "proxy TCP6 fc00:dead:beef:4dad::1:6 ::1 6 42",
+            "PROXY UNKNOWN fc00:dead:beef:4dad::1:6 ::1 6 42",
             "GET / HTTP/1.1",
         ] {
             assert_eq!(circuit(bad), None, "{bad}");
@@ -96,7 +104,7 @@ mod tests {
             use tokio::io::AsyncWriteExt;
             b.write_all(b"PROXY TCP6 fc00:dead:").await.unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            b.write_all(b"beef:4dad:0:7 ::1 7 80\r\nGET / HTTP/1.1\r\n")
+            b.write_all(b"beef:4dad::0:7 ::1 7 80\r\nGET / HTTP/1.1\r\n")
                 .await
                 .unwrap();
             b

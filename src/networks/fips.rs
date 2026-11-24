@@ -1,12 +1,12 @@
-//! FIPS: the relay listens on this node's FIPS address (or on `[::]`), and
-//! clients reach it at `ws://npub1….fips:<port>`.
+//! FIPS: the relay listens on this node's FIPS address, and clients reach it
+//! at `ws://npub1….fips:<port>`.
 //!
 //! FIPS gives every node an address in fd00::/8 derived from its Nostr key,
 //! and peers arrive from their own address, so the peer address is the
 //! client's identity, whole (not by /64, as on clearnet). A peer from
-//! outside fd00::/8 did not come over FIPS and is turned away, so a
-//! listener on `[::]` cannot be used to reach the relay around its clearnet
-//! limits.
+//! outside fd00::/8 did not come over FIPS and is turned away. fd00::/8 is
+//! all of private IPv6, though, so the docs say to bind to the node's own
+//! address rather than `[::]`.
 
 use std::net::IpAddr;
 

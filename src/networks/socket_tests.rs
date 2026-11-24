@@ -90,7 +90,7 @@ async fn http(r: &Running, n: Network, preamble: &str, request: &str) -> String 
 
 fn tor_line(gid: u32) -> String {
     format!(
-        "PROXY TCP6 fc00:dead:beef:4dad:{:x}:{:x} ::1 {} 80\r\n",
+        "PROXY TCP6 fc00:dead:beef:4dad::{:x}:{:x} ::1 {} 80\r\n", // as Tor writes it: note the "::"
         gid >> 16,
         gid & 0xffff,
         gid & 0xffff
@@ -299,4 +299,28 @@ fn fips_peers_are_their_own_clients() {
         "not served on Tor"
     );
     assert_eq!(server::origin_of(&sh, Network::Tor, peer, None, &req), None);
+}
+
+#[tokio::test]
+async fn an_overlay_holds_only_its_share_of_the_reserved_slots() {
+    // Cap 1, 8 reserved: Tor may hold 2 probation slots (a quarter).
+    let r = start(
+        &Keys::generate(),
+        &[
+            ("DEADHOP_RELAY_TOR_MAX_CONNECTIONS", "1"),
+            ("DEADHOP_RELAY_RESERVED_CONNECTIONS", "8"),
+        ],
+    )
+    .await;
+    let (_a, _) = via(&r, Network::Tor, &tor_line(1), &[]).await;
+    let (_b, _) = via(&r, Network::Tor, &tor_line(2), &[]).await;
+    let (_c, _) = via(&r, Network::Tor, &tor_line(3), &[]).await;
+    let ws_head = "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+                   Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    let out = http(&r, Network::Tor, &tor_line(4), ws_head).await;
+    assert!(out.starts_with("HTTP/1.1 503"), "{out}");
+    let tor = r.shared.net(Network::Tor).unwrap();
+    assert_eq!((tor.probation.load(Relaxed), r.shared.probation.load(Relaxed)), (2, 2));
+    assert_eq!(crate::networks::probation_share(0), 1);
+    r.stop().await;
 }

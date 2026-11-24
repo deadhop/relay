@@ -119,10 +119,20 @@ pub struct Adapter {
     pub max_connections: usize,
 }
 
+/// Probation slots an overlay network may hold at once: a quarter of the
+/// reserved connections (at least one). Fresh circuits and destinations cost
+/// nothing, so without this a flood over one overlay could hold every slot
+/// kept for whitelisted keys, on every network.
+pub fn probation_share(reserved: usize) -> usize {
+    (reserved / 4).max(1)
+}
+
 /// Counters for one network: what the network's page shows.
 pub struct NetStats {
     pub network: Network,
     pub open: AtomicUsize,
+    /// Connections over this network on probation now.
+    pub probation: AtomicUsize,
     pub total: AtomicU64,
     /// Connections turned away: over the limits, a peer that is not the
     /// daemon, or no identity where one was required.
@@ -141,6 +151,7 @@ impl NetStats {
         NetStats {
             network,
             open: AtomicUsize::new(0),
+            probation: AtomicUsize::new(0),
             total: AtomicU64::new(0),
             turned_away: AtomicU64::new(0),
             accepted: AtomicU64::new(0),

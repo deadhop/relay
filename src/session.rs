@@ -55,6 +55,7 @@ impl Admission {
         sh.stats.connections_total.fetch_add(1, Relaxed);
         if probation {
             sh.probation.fetch_add(1, Relaxed);
+            n.probation.fetch_add(1, Relaxed);
         }
         Admission { sh, origin, probation }
     }
@@ -63,6 +64,8 @@ impl Admission {
         if self.probation {
             self.probation = false;
             self.sh.probation.fetch_sub(1, Relaxed);
+            let n = self.sh.net(self.origin.network()).expect(COUNTED);
+            n.probation.fetch_sub(1, Relaxed);
             lock(&self.sh.origins).end_probation(self.origin);
         }
     }

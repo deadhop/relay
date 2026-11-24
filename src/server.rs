@@ -16,7 +16,7 @@ use tokio_tungstenite::WebSocketStream;
 use crate::config::{Config, Limits};
 use crate::http::{read_head_after, respond, switching, Prefixed, Request, Response};
 use crate::limits::{Admit, Origin};
-use crate::networks::{fips, i2p, tor, Network};
+use crate::networks::{fips, i2p, probation_share, tor, Network};
 use crate::session::{self, Admission};
 use crate::state::{lock, Shared};
 use crate::web;
@@ -244,14 +244,16 @@ async fn upgrade(
     let n = origin.network();
     let admit = lock(&sh.origins).connect(origin, lim.connections_per_ip, Instant::now());
     // An overlay's own cap: its clients are free to mint, so this bounds them.
-    let net_full = sh
-        .cfg
-        .adapter(n)
-        .zip(sh.net(n))
-        .is_some_and(|(a, s)| s.open.load(Relaxed) >= a.max_connections);
+    let overlay = sh.cfg.adapter(n).zip(sh.net(n));
+    let net_full = overlay.is_some_and(|(a, s)| s.open.load(Relaxed) >= a.max_connections);
     let probation = admit == Admit::Probation || net_full || sh.open.load(Relaxed) >= lim.max_connections;
+    // An overlay holds at most its share of the reserved slots.
+    let share_full =
+        overlay.is_some_and(|(_, s)| s.probation.load(Relaxed) >= probation_share(lim.reserved_connections));
     let full = probation
-        && (sh.probation.load(Relaxed) >= lim.reserved_connections || !lock(&sh.origins).take_probation(origin));
+        && (sh.probation.load(Relaxed) >= lim.reserved_connections
+            || share_full
+            || !lock(&sh.origins).take_probation(origin));
     if full {
         lock(&sh.origins).disconnect(origin);
         turn_away(&sh, Door::Net(n));
