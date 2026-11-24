@@ -6,7 +6,7 @@ A Nostr relay that carries one deadhop service's ContextVM traffic, and nothing 
 
 [![License](https://img.shields.io/github/license/sandwichfarm/deadhop?style=for-the-badge)](https://github.com/sandwichfarm/deadhop/blob/main/LICENSE)
 [![Coverage](https://img.shields.io/badge/coverage-100%25%20lines%20%26%20functions-5fc6b9?style=for-the-badge)](#verify)
-[![Docs](https://img.shields.io/badge/docs-%2Frelay%2Fdocs-e8c547?style=for-the-badge)](https://deadhop.run/relay/docs/)
+[![Docs](https://img.shields.io/badge/docs-%2Fdocs%2Frelay-e8c547?style=for-the-badge)](https://deadhop.run/docs/relay/)
 
 </div>
 
@@ -18,7 +18,7 @@ deadhop talks only over [ContextVM](https://contextvm.org) (MCP over Nostr), so 
 - **answers** from those keys only, either signed by them or sent on a connection that proved the key with NIP-42 AUTH;
 - those keys' **announcements**.
 
-It can also be served on Tor, I2P and FIPS, alone or all at once, each through an adapter your daemon forwards to ([networks](https://deadhop.run/relay/docs/networks.html)). It refuses everything else, before checking any signature. Without a whitelist it does not start, unless you set `DEADHOP_RELAY_PUBLIC=on`: it then carries ContextVM traffic for any key, under public limits, and whitelisted keys keep their privileges ([public mode](https://deadhop.run/relay/docs/security.html#public-mode)).
+It can also be served on Tor, I2P and FIPS, alone or all at once, each through an adapter your daemon forwards to ([networks](https://deadhop.run/docs/relay/networks.html)). It refuses everything else, before checking any signature. Without a whitelist it does not start, unless you set `DEADHOP_RELAY_PUBLIC=on`: it then carries ContextVM traffic for any key, under public limits, and whitelisted keys keep their privileges ([public mode](https://deadhop.run/docs/relay/security.html#public-mode)).
 
 ```text
 customer / dashboard ──wss──▶ deadhop-relay ◀──wss── deadhop service (AUTH as a whitelisted key)
@@ -30,7 +30,7 @@ Use it on your home network to keep admin traffic off public relays, or on a sma
 | Measure | Result |
 | --- | --- |
 | Dropped | **0** of 300,000 round trips, none refused, including under floods of up to 970,000 messages a second |
-| Throughput | 4,823 round trips a second with 1,000 clients on 2 CPUs and 1 GiB, p99 27.5 ms ([benchmark](../site/relay-docs/performance.md)) |
+| Throughput | 4,823 round trips a second with 1,000 clients on 2 CPUs and 1 GiB, p99 27.5 ms ([benchmark](../site/docs/relay/performance.md)) |
 | Size | one static binary of about 2 MB; about 2.7 MiB of memory idle; no disk |
 | Privacy | a request reaches only the connection authenticated as its recipient |
 
@@ -64,21 +64,21 @@ Put TLS in front (Caddy, nginx or Traefik). Then set `DEADHOP_RELAY_TRUSTED_PROX
 
 ## Documentation
 
-The docs are in `site/relay-docs/` and are published at `/relay/docs/`.
+The docs are in `site/docs/relay/` and are published at `/docs/relay/`, with the rest of the deadhop docs.
 
 | Page | What it covers |
 | --- | --- |
-| [Overview](../site/relay-docs/index.md) | what the relay carries and where to run it |
-| [Quick start](../site/relay-docs/quickstart.md) | keys, run, TLS, pointing deadhop at it |
-| [How it works](../site/relay-docs/architecture.md) | write and read rules, fan-out, memory, why nothing accepted is dropped |
-| [Flood resistance](../site/relay-docs/hardening.md) | every limit, probation, trusted proxies, what it cannot stop |
-| [Performance](../site/relay-docs/performance.md) | the benchmark and its results |
-| [Security](../site/relay-docs/security.md) | what the relay sees and trusts; the health-check exception |
-| [Configuration](../site/relay-docs/configuration.md) | every `DEADHOP_RELAY_*` variable, default and range |
-| [Deployment](../site/relay-docs/deployment.md) | systemd, Docker, Caddy, nginx, Traefik, the home network |
-| [Tor, I2P and FIPS](../site/relay-docs/networks.md) | serving the relay on overlay networks, at once, with each network's numbers |
-| [Status pages](../site/relay-docs/status-pages.md) | the public page, the operator page, NIP-11, `/stats.json` |
-| [Testing](../site/relay-docs/testing.md) | what the tests cover, and the deadhop e2e runs |
+| [Overview](../site/docs/relay/index.md) | what the relay carries and where to run it |
+| [Quick start](../site/docs/relay/quickstart.md) | keys, run, TLS, pointing deadhop at it |
+| [How it works](../site/docs/relay/architecture.md) | write and read rules, fan-out, memory, why nothing accepted is dropped |
+| [Flood resistance](../site/docs/relay/hardening.md) | every limit, probation, trusted proxies, what it cannot stop |
+| [Performance](../site/docs/relay/performance.md) | the benchmark and its results |
+| [Security](../site/docs/relay/security.md) | what the relay sees and trusts; the health-check exception |
+| [Configuration](../site/docs/relay/configuration.md) | every `DEADHOP_RELAY_*` variable, default and range |
+| [Deployment](../site/docs/relay/deployment.md) | systemd, Docker, Caddy, nginx, Traefik, the home network |
+| [Tor, I2P and FIPS](../site/docs/relay/networks.md) | serving the relay on overlay networks, at once, with each network's numbers |
+| [Status pages](../site/docs/relay/status-pages.md) | the public page, the operator page, NIP-11, `/stats.json` |
+| [Testing](../site/docs/relay/testing.md) | what the tests cover, and the deadhop e2e runs |
 
 ## Project structure
 
