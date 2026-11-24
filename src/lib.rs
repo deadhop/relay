@@ -31,6 +31,7 @@ usage:
 Configuration comes from DEADHOP_RELAY_* environment variables. A whitelist is
 required: DEADHOP_RELAY_WHITELIST=invoices=npub1...,admin=npub1...
 unless the relay is public (DEADHOP_RELAY_PUBLIC=on): ContextVM traffic for any key.
+Also on Tor, I2P or FIPS: DEADHOP_RELAY_TOR_LISTEN and DEADHOP_RELAY_TOR_URLS (and I2P_, FIPS_).
 Docs: https://deadhop.run/relay/docs/";
 
 /// What `check` prints: the settings that matter, one per line.

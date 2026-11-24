@@ -211,7 +211,11 @@ pub fn network(sh: &Shared, n: &NetStats, now: u64) -> Value {
         "listen": listen.map(|a| a.to_string()),
         "urls": urls,
         "identity": net.identity(),
-        "daemons": sh.cfg.adapter(net).map(|a| a.daemons.iter().map(ToString::to_string).collect::<Vec<_>>()),
+        "daemons": sh
+            .cfg
+            .adapter(net)
+            .filter(|a| !a.daemons.is_empty())
+            .map(|a| a.daemons.iter().map(ToString::to_string).collect::<Vec<_>>()),
         "connections": n.open.load(Relaxed),
         "max_connections": cap,
         "clients": lock(&sh.origins).connected(net),
@@ -521,6 +525,8 @@ pub fn network_page(sh: &Shared, net: Network) -> Option<String> {
     if let Some(d) = v["daemons"].as_array() {
         let d: Vec<&str> = d.iter().map(|x| x.as_str().expect("an address")).collect();
         how += &row("Accepted only from", mono(d.join(", ")));
+    } else if net == Network::Fips {
+        how += &row("Accepted only from", "FIPS addresses (fd00::/8)".into());
     }
     how += &row(
         "Connection cap",
@@ -567,7 +573,7 @@ pub fn network_page(sh: &Shared, net: Network) -> Option<String> {
         String::new()
     } else {
         format!(
-            "<h2>Whitelisted keys over {label}</h2><div class=\"card\"><table><thead><tr><th>Key</th><th>npub</th>\
+            "<h2>Whitelisted keys over {label}</h2><div class=\"card\"><table class=\"netkeys\"><thead><tr><th>Key</th><th>npub</th>\
 <th class=\"n\">Sessions</th></tr></thead><tbody>{keys}</tbody></table></div>",
             label = net.label()
         )
@@ -575,7 +581,7 @@ pub fn network_page(sh: &Shared, net: Network) -> Option<String> {
     let history: Vec<Minute> = serde_json::from_value(v["history"].clone()).expect("minutes");
     let body = format!(
         "<p class=\"crumb lbl\"><a href=\"/\">Overview</a> / {label}</p><h1>{label}</h1>\
-<p class=\"lead\">{service}. Numbers on this page count only what arrived over {label}.</p><div class=\"urls\">{urls}</div>{tiles}\
+<p class=\"lead\">{service}. Numbers on this page count only what arrived over {label}.</p><div class=\"urls net\">{urls}</div>{tiles}\
 <h2>Last hour</h2><div class=\"card\">{chart}<div class=\"legend lbl\"><span><span class=\"sw a\"></span>accepted per minute</span>\
 <span><span class=\"sw r\"></span>refused per minute</span></div></div>\
 <div class=\"cols\"><div><h2>How it is reached</h2><div class=\"card\"><table><tbody>{how}</tbody></table></div></div>\
@@ -904,6 +910,7 @@ mod tests {
         assert!(clear.contains("the relay&#39;s (512)") && !clear.contains("Accepted only from"));
         let fips = body(&route(&sh, &get("/networks/fips", None), true));
         assert!(fips.contains("by node") && fips.contains("class=\"on\">FIPS"));
+        assert!(fips.contains("<td>Accepted only from</td><td>FIPS addresses (fd00::/8)</td>"));
         assert_eq!(
             route(&sh, &get("/networks/i2p", None), true).status,
             404,

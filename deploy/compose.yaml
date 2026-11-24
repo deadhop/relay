@@ -34,6 +34,16 @@ services:
       DEADHOP_RELAY_MIN_POW: ${DEADHOP_RELAY_MIN_POW:-}
       DEADHOP_RELAY_HOLD_SECS: ${DEADHOP_RELAY_HOLD_SECS:-}
       DEADHOP_RELAY_ALLOW_PROBE: ${DEADHOP_RELAY_ALLOW_PROBE:-}
+      # Tor, I2P, FIPS (see the docs). Point your daemon at these listeners on
+      # this container's network; do not publish their ports to the host.
+      DEADHOP_RELAY_TOR_LISTEN: ${DEADHOP_RELAY_TOR_LISTEN:-}
+      DEADHOP_RELAY_TOR_URLS: ${DEADHOP_RELAY_TOR_URLS:-}
+      DEADHOP_RELAY_TOR_DAEMONS: ${DEADHOP_RELAY_TOR_DAEMONS:-}
+      DEADHOP_RELAY_I2P_LISTEN: ${DEADHOP_RELAY_I2P_LISTEN:-}
+      DEADHOP_RELAY_I2P_URLS: ${DEADHOP_RELAY_I2P_URLS:-}
+      DEADHOP_RELAY_I2P_DAEMONS: ${DEADHOP_RELAY_I2P_DAEMONS:-}
+      DEADHOP_RELAY_FIPS_LISTEN: ${DEADHOP_RELAY_FIPS_LISTEN:-}
+      DEADHOP_RELAY_FIPS_URLS: ${DEADHOP_RELAY_FIPS_URLS:-}
     ports:
       - "7447:7447"
       # The operator page has no sign-in: publish it to the host's loopback only.
