@@ -1,17 +1,14 @@
 # deadhop relay: one static binary on an empty base.
-# Build context: the repository root (the status pages embed the brand's fonts and mark).
+# Build context: this repository's root.
 #
-#   docker build -f relay/Dockerfile -t deadhop-relay .
+#   docker build -t deadhop-relay .
 FROM rust:1.99-alpine AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
-COPY brand/logo/mark-currentcolor.svg brand/logo/
-COPY brand/icons/favicon.svg brand/icons/
-COPY brand/fonts/*.woff2 brand/fonts/
-COPY relay/Cargo.toml relay/Cargo.lock relay/
-COPY relay/src relay/src
-COPY relay/assets relay/assets
-RUN cd relay && cargo build --release --locked --bin deadhop-relay && cp target/release/deadhop-relay /deadhop-relay
+COPY Cargo.toml Cargo.lock ./
+COPY src src
+COPY assets assets
+RUN cargo build --release --locked --bin deadhop-relay && cp target/release/deadhop-relay /deadhop-relay
 
 FROM scratch
 COPY --from=build /deadhop-relay /deadhop-relay

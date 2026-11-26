@@ -16,17 +16,17 @@ use crate::state::{lock, Shared};
 use crate::stats::{Minute, REASONS};
 
 const CSS: &str = include_str!("../assets/relay.css");
-const MARK: &str = include_str!("../../brand/logo/mark-currentcolor.svg");
-const FAVICON: &str = include_str!("../../brand/icons/favicon.svg");
+const MARK: &str = include_str!("../assets/brand/logo/mark-currentcolor.svg");
+const FAVICON: &str = include_str!("../assets/brand/icons/favicon.svg");
 const FONTS: [(&str, &[u8]); 3] = [
-    ("geist.woff2", include_bytes!("../../brand/fonts/geist.woff2")),
+    ("geist.woff2", include_bytes!("../assets/brand/fonts/geist.woff2")),
     (
         "martian-mono.woff2",
-        include_bytes!("../../brand/fonts/martian-mono.woff2"),
+        include_bytes!("../assets/brand/fonts/martian-mono.woff2"),
     ),
     (
         "schibsted-grotesk.woff2",
-        include_bytes!("../../brand/fonts/schibsted-grotesk.woff2"),
+        include_bytes!("../assets/brand/fonts/schibsted-grotesk.woff2"),
     ),
 ];
 const CSP: &str = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; \

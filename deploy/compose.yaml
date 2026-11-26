@@ -1,12 +1,11 @@
 # deadhop relay with Docker Compose. Build from the repository root:
-#   docker compose -f relay/deploy/compose.yaml up -d --build
+#   docker compose -f deploy/compose.yaml up -d --build
 # Set DEADHOP_RELAY_WHITELIST (or DEADHOP_RELAY_PUBLIC=on) in a .env file next to
 # this one, or in the shell. The relay refuses to start with neither.
 services:
   relay:
     build:
-      context: ../..
-      dockerfile: relay/Dockerfile
+      context: ..
     image: deadhop-relay
     restart: unless-stopped
     read_only: true

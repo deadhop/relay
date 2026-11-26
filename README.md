@@ -30,14 +30,14 @@ Use it on your home network to keep admin traffic off public relays, or on a sma
 | Measure | Result |
 | --- | --- |
 | Dropped | **0** of 300,000 round trips, none refused, including under floods of up to 970,000 messages a second |
-| Throughput | 4,823 round trips a second with 1,000 clients on 2 CPUs and 1 GiB, p99 27.5 ms ([benchmark](../site/docs/relay/performance.md)) |
+| Throughput | 4,823 round trips a second with 1,000 clients on 2 CPUs and 1 GiB, p99 27.5 ms ([benchmark](https://deadhop.run/docs/relay/performance.html)) |
 | Size | one static binary of about 2 MB; about 2.7 MiB of memory idle; no disk |
 | Privacy | a request reaches only the connection authenticated as its recipient |
 
 ## Quick start
 
 ```sh
-cd relay && cargo build --release
+cargo build --release
 export DEADHOP_RELAY_WHITELIST="invoices=npub1…,admin=npub1…"   # from deadhop's server.pubkey and admin.pubkey
 ./target/release/deadhop-relay check                             # print what it understood; start nothing
 ./target/release/deadhop-relay                                   # relay on :7447, operator page on 127.0.0.1:7448
@@ -46,7 +46,7 @@ export DEADHOP_RELAY_WHITELIST="invoices=npub1…,admin=npub1…"   # from deadh
 With Docker, from the repository root:
 
 ```sh
-docker build -f relay/Dockerfile -t deadhop-relay .               # about 2 MB, scratch base
+docker build -t deadhop-relay .                                  # about 2 MB, scratch base
 docker run -d -p 7447:7447 -p 127.0.0.1:7448:7448 \
   -e DEADHOP_RELAY_WHITELIST="admin=npub1…" deadhop-relay
 ```
@@ -64,27 +64,28 @@ Put TLS in front (Caddy, nginx or Traefik). Then set `DEADHOP_RELAY_TRUSTED_PROX
 
 ## Documentation
 
-The docs are in `site/docs/relay/` and are published at `/docs/relay/`, with the rest of the deadhop docs.
+The docs are published at [deadhop.run/docs/relay](https://deadhop.run/docs/relay/), with the rest of the deadhop docs. Their source is in [deadhop/site](https://github.com/deadhop/site) under `docs/relay/`: send doc fixes there.
 
 | Page | What it covers |
 | --- | --- |
-| [Overview](../site/docs/relay/index.md) | what the relay carries and where to run it |
-| [Quick start](../site/docs/relay/quickstart.md) | keys, run, TLS, pointing deadhop at it |
-| [How it works](../site/docs/relay/architecture.md) | write and read rules, fan-out, memory, why nothing accepted is dropped |
-| [Flood resistance](../site/docs/relay/hardening.md) | every limit, probation, trusted proxies, what it cannot stop |
-| [Performance](../site/docs/relay/performance.md) | the benchmark and its results |
-| [Security](../site/docs/relay/security.md) | what the relay sees and trusts; the health-check exception |
-| [Configuration](../site/docs/relay/configuration.md) | every `DEADHOP_RELAY_*` variable, default and range |
-| [Deployment](../site/docs/relay/deployment.md) | systemd, Docker, Caddy, nginx, Traefik, the home network |
-| [Tor, I2P and FIPS](../site/docs/relay/networks.md) | serving the relay on overlay networks, at once, with each network's numbers |
-| [Status pages](../site/docs/relay/status-pages.md) | the public page, the operator page, NIP-11, `/stats.json` |
-| [Testing](../site/docs/relay/testing.md) | what the tests cover, and the deadhop e2e runs |
+| [Overview](https://deadhop.run/docs/relay/) | what the relay carries and where to run it |
+| [Quick start](https://deadhop.run/docs/relay/quickstart.html) | keys, run, TLS, pointing deadhop at it |
+| [How it works](https://deadhop.run/docs/relay/architecture.html) | write and read rules, fan-out, memory, why nothing accepted is dropped |
+| [Flood resistance](https://deadhop.run/docs/relay/hardening.html) | every limit, probation, trusted proxies, what it cannot stop |
+| [Performance](https://deadhop.run/docs/relay/performance.html) | the benchmark and its results |
+| [Security](https://deadhop.run/docs/relay/security.html) | what the relay sees and trusts; the health-check exception |
+| [Configuration](https://deadhop.run/docs/relay/configuration.html) | every `DEADHOP_RELAY_*` variable, default and range |
+| [Deployment](https://deadhop.run/docs/relay/deployment.html) | systemd, Docker, Caddy, nginx, Traefik, the home network |
+| [Tor, I2P and FIPS](https://deadhop.run/docs/relay/networks.html) | serving the relay on overlay networks, at once, with each network's numbers |
+| [Status pages](https://deadhop.run/docs/relay/status-pages.html) | the public page, the operator page, NIP-11, `/stats.json` |
+| [Testing](https://deadhop.run/docs/relay/testing.html) | what the tests cover, and the deadhop e2e runs |
 
 ## Project structure
 
 ```text
-relay/
+.
 ├── assets/relay.css          status page styles (deadhop brand)
+├── assets/brand/             copies of the brand's fonts, mark and favicon (from deadhop/brand)
 ├── bench/                    load and flood benchmark (its own crate) and results
 ├── deploy/                   compose file, systemd unit, Caddyfile, example env
 ├── src/
@@ -112,8 +113,8 @@ relay/
 ## Verify
 
 ```sh
-just relay          # fmt, clippy -D warnings, tests with 100% line and function coverage, release build
-just relay-bench    # about 4 minutes in a 2-CPU, 1 GiB container (never on a desktop); results in relay/bench/results/<date>/
+just check          # fmt, clippy -D warnings, tests with 100% line and function coverage, release build
+just bench          # about 4 minutes in a 2-CPU, 1 GiB container (never on a desktop); results in bench/results/<date>/
 ```
 
 ## License
