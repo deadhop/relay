@@ -174,6 +174,23 @@ exhaust a desktop's network buffers.
 └── justfile
 ```
 
+## Agent skills
+
+This repository ships [agent skills](https://deadhop.run/docs/skills.html) for Claude Code,
+Codex, Cursor and other agents that read `SKILL.md`:
+
+```sh
+npx skills add deadhop/relay
+```
+
+| Skill | Use it to |
+| --- | --- |
+| `deadhop-relay-setup` | run the relay for a deadhop service: the whitelist, TLS in front, adding it in deadhop and the dashboard, the status pages |
+| `deadhop-relay-develop` | change the relay: `just check` at 100% coverage, `just bench` in its container only, the brand copies |
+
+Install one with `--skill <name>`. Every deadhop skill is listed on
+[Agent skills](https://deadhop.run/docs/skills.html).
+
 ## Contributing
 
 Issues and pull requests are welcome here. CI runs `just check` on every pull request; run it
