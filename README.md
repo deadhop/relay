@@ -4,7 +4,7 @@
 
 A Nostr relay that carries one deadhop service's ContextVM traffic, and nothing else.
 
-[![License](https://img.shields.io/github/license/sandwichfarm/deadhop?style=for-the-badge)](https://github.com/sandwichfarm/deadhop/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/deadhop/relay?style=for-the-badge)](LICENSE)
 [![Coverage](https://img.shields.io/badge/coverage-100%25%20lines%20%26%20functions-5fc6b9?style=for-the-badge)](#verify)
 [![Docs](https://img.shields.io/badge/docs-%2Fdocs%2Frelay-e8c547?style=for-the-badge)](https://deadhop.run/docs/relay/)
 

@@ -91,7 +91,7 @@ pub fn info(sh: &Shared) -> Value {
     json!({
         "name": sh.cfg.name,
         "description": sh.cfg.description,
-        "software": "https://github.com/sandwichfarm/deadhop/tree/main/relay",
+        "software": "https://github.com/deadhop/relay",
         "version": VERSION,
         "supported_nips": NIPS,
         "limitation": {
